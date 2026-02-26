@@ -226,8 +226,7 @@ export default {
       camera.lookAt(0, 0, 0)
 
       controls = new OrbitControls(camera, renderer.domElement)
-      controls.enableDamping   = true
-      controls.dampingFactor   = 0.06
+      controls.enableDamping   = false
       controls.screenSpacePanning = true
       controls.enableZoom      = true
 
@@ -319,7 +318,8 @@ export default {
         loadedModel.updateMatrixWorld(true)
 
         // Auto-fit camera using world-space bounding box center as orbit pivot
-        const box    = new THREE.Box3().setFromObject(loadedModel)
+        // precise:true iterates actual vertex positions for an accurate bbox
+        const box    = new THREE.Box3().setFromObject(loadedModel, true)
         const center = box.getCenter(new THREE.Vector3())
         const size   = box.getSize(new THREE.Vector3())
         const maxDim = Math.max(size.x, size.y, size.z)
@@ -334,6 +334,7 @@ export default {
         camera.near = maxDim * 0.0001
         camera.far  = maxDim * 200
         camera.updateProjectionMatrix()
+        camera.lookAt(center)
 
         controls.target.copy(center)
         controls.minDistance = maxDim * 0.05
@@ -383,10 +384,9 @@ export default {
     }
 
     // ─── Per-face highlight overlay ───────────────────────────────────────────
-    const selectFace = (mesh, materialIndex) => {
+    const selectFace = (mesh, faceIndex) => {
       removeHighlight()
       const geo = mesh.geometry
-      const hasFaceGroups = geo.groups?.length > 1
       const subGeo = new THREE.BufferGeometry()
 
       // Share (don't clone) vertex attributes — safe for static models
@@ -394,16 +394,27 @@ export default {
         subGeo.setAttribute(key, attr)
       }
 
-      if (hasFaceGroups && geo.index) {
-        const group = geo.groups[materialIndex ?? 0]
+      // Find the group whose index-buffer range contains the hit triangle.
+      // faceIndex * 3 is the offset into the index buffer for that triangle.
+      let idxStart = 0
+      let idxCount = geo.index ? geo.index.count : (geo.attributes.position?.count ?? 0)
+
+      if (geo.groups?.length > 0 && geo.index) {
+        const triOffset = faceIndex * 3
+        const group = geo.groups.find(
+          g => triOffset >= g.start && triOffset < g.start + g.count
+        )
         if (group) {
-          const src = geo.index.array
-          const arr = new (src.constructor)(group.count)
-          for (let i = 0; i < group.count; i++) arr[i] = src[group.start + i]
-          subGeo.setIndex(new THREE.BufferAttribute(arr, 1))
+          idxStart = group.start
+          idxCount = group.count
         }
-      } else if (geo.index) {
-        subGeo.setIndex(geo.index) // whole mesh, shared ref
+      }
+
+      if (geo.index) {
+        const src = geo.index.array
+        const arr = new (src.constructor)(idxCount)
+        for (let i = 0; i < idxCount; i++) arr[i] = src[idxStart + i]
+        subGeo.setIndex(new THREE.BufferAttribute(arr, 1))
       }
 
       highlightOverlay = new THREE.Mesh(subGeo, new THREE.MeshBasicMaterial({
@@ -435,7 +446,19 @@ export default {
     }
 
     // ─── Canvas click → raycasting ────────────────────────────────────────────
+    const onPointerDown = (event) => {
+      pointerDownPos = { x: event.clientX, y: event.clientY }
+    }
+
     const onCanvasClick = (event) => {
+      // Skip if this is a drag-release (pointer moved > 5 CSS px since pointerdown)
+      if (pointerDownPos) {
+        const dx = event.clientX - pointerDownPos.x
+        const dy = event.clientY - pointerDownPos.y
+        pointerDownPos = null
+        if (Math.sqrt(dx * dx + dy * dy) > 5) return
+      }
+
       if (!scene || !camera || !loadedModel) return
 
       const canvas = canvasRef.value
@@ -453,15 +476,14 @@ export default {
 
       if (hits.length > 0) {
         const hit = hits[0]
-        const groupIndex = hit.face?.materialIndex ?? 0
-        selectFace(hit.object, groupIndex)
-        selectionLabel.value = hit.object.name || `Face ${hit.faceIndex}`
+        selectFace(hit.object, hit.faceIndex ?? 0)
+        selectionLabel.value = hit.object.name || `Face ${hit.face?.materialIndex ?? hit.faceIndex}`
 
         emit('trigger-event', {
           name: 'face-selected',
           event: {
             faceIndex:  hit.faceIndex ?? 0,
-            groupIndex,
+            groupIndex: hit.face?.materialIndex ?? 0,
             meshName:   hit.object.name || '',
             objectName: hit.object.parent?.name || hit.object.name || '',
             point:  { x: hit.point.x, y: hit.point.y, z: hit.point.z },
@@ -590,7 +612,7 @@ export default {
       modelLoaded, isDragging,
       rootStyle,
       // Handlers
-      onCanvasClick,
+      onPointerDown, onCanvasClick,
       resetCamera, rotateLeft, rotateRight,
       triggerFileUpload, onFileSelected, onDragOver, onDragLeave, onDrop,
       /* wwEditor:start */
