@@ -98,13 +98,11 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 
 // ─── CDN URLs (loaded at runtime, bypassing webpack) ─────────────────────────
 const CDN = 'https://esm.sh/three@0.162.0'
-const CDN_ORBIT = CDN + '/examples/jsm/controls/OrbitControls'
-const CDN_GLTF  = CDN + '/examples/jsm/loaders/GLTFLoader'
 
 // Module-level cache so libs are fetched once per page load
-let THREE = null
+let THREE         = null
 let OrbitControls = null
-let GLTFLoader = null
+let GLTFLoader    = null
 
 const loadLibs = async () => {
   if (THREE) return
@@ -113,9 +111,9 @@ const loadLibs = async () => {
     import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/controls/OrbitControls'),
     import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/loaders/GLTFLoader'),
   ])
-  THREE = t
+  THREE         = t
   OrbitControls = c.OrbitControls
-  GLTFLoader = g.GLTFLoader
+  GLTFLoader    = g.GLTFLoader
 }
 
 // ─── Document / window helpers (WeWeb-safe) ───────────────────────────────────
@@ -150,6 +148,22 @@ export default {
     const isEditing = computed(() => props.wwEditorState?.isEditing)
     /* wwEditor:end */
 
+    // ─── Formula resolution (WeWeb) ───────────────────────────────────────────
+    const resolveMappingFormula = (typeof wwLib !== 'undefined' && wwLib.wwFormula?.useFormula)
+      ? wwLib.wwFormula.useFormula().resolveMappingFormula
+      : null
+
+    // ─── Internal variable — exposes multi-selection to NoCode flows ──────────
+    const _wwVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'multiSelection',
+          type:         'array',
+          defaultValue: [],
+        })
+      : null
+    const setMultiSelectionVar = (val) => _wwVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -159,35 +173,56 @@ export default {
     let animFrameId    = null
     let resizeObserver = null
     let loadedModel    = null
-    let highlightOverlay = null
     let gridHelper     = null
+
+    let clickableMeshes    = []
+    // Multi-selection: [{mesh, groupIndex, overlay, faceIndex, point, normal, meshName, objectName, userData}]
+    let selections         = []
+    // Annotation overlays: [{mesh, groupIndex, overlay, annotation}]
+    let annotationOverlays = []
+
     let modelRadius    = 5
     let snapAnim       = null
-    let pointerDownPos = null   // for drag detection
+    let pointerDownPos = null
+    let isShiftHeld    = false
 
-    // Stored after first model load; used by resetCamera
     let defaultCameraPos = null
     let defaultTarget    = null
 
     // ─── Computed ─────────────────────────────────────────────────────────────
     const rootStyle = computed(() => ({
-      width: '100%',
-      height: '100%',
-      position: 'relative',
-      overflow: 'hidden',
+      width:      '100%',
+      height:     '100%',
+      position:   'relative',
+      overflow:   'hidden',
       background: props.content?.backgroundColor || 'transparent',
     }))
+
+    // Resolved annotation array — handles formula field mapping
+    const processedAnnotations = computed(() => {
+      const items = props.content?.annotations
+      if (!Array.isArray(items) || !items.length) return []
+      return items.map(item => {
+        let point  = item.point
+        let normal = item.normal
+        if (resolveMappingFormula) {
+          point  = resolveMappingFormula(props.content?.annotationPointFormula,  item) ?? item.point
+          normal = resolveMappingFormula(props.content?.annotationNormalFormula, item) ?? item.normal
+        }
+        return { ...item, point, normal }
+      })
+    })
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
     const easeInOut = (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t)
 
-    const isDataUrl  = (s) => typeof s === 'string' && s.startsWith('data:')
-    const isHttpUrl  = (s) => typeof s === 'string' &&
+    const isDataUrl = (s) => typeof s === 'string' && s.startsWith('data:')
+    const isHttpUrl = (s) => typeof s === 'string' &&
       (s.startsWith('http') || s.startsWith('/') || s.startsWith('blob:'))
 
     const decodeBase64ToBuffer = (b64) => {
-      const raw = atob(b64)
-      const buf = new ArrayBuffer(raw.length)
+      const raw  = atob(b64)
+      const buf  = new ArrayBuffer(raw.length)
       const view = new Uint8Array(buf)
       for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i)
       return buf
@@ -202,6 +237,160 @@ export default {
       })
     }
 
+    // Return the geometry group's materialIndex for a given triangle faceIndex
+    const getGroupIndex = (mesh, faceIndex) => {
+      const geo = mesh.geometry
+      if (geo.groups?.length > 0) {
+        const triOffset = faceIndex * 3
+        const group = geo.groups.find(g => triOffset >= g.start && triOffset < g.start + g.count)
+        if (group) return group.materialIndex ?? 0
+      }
+      return 0
+    }
+
+    // Build a sub-geometry overlay mesh that covers only the group containing faceIndex.
+    // offsetFactor: -1 for annotations (below), -2 for selections (above annotations).
+    const makeOverlayMesh = (mesh, faceIndex, color, offsetFactor = -2) => {
+      const geo    = mesh.geometry
+      const subGeo = new THREE.BufferGeometry()
+
+      // Share vertex attributes (read-only; safe for static geometry)
+      for (const [key, attr] of Object.entries(geo.attributes)) {
+        subGeo.setAttribute(key, attr)
+      }
+
+      let idxStart = 0
+      let idxCount = geo.index ? geo.index.count : (geo.attributes.position?.count ?? 0)
+
+      if (geo.groups?.length > 0) {
+        const triOffset = faceIndex * 3
+        const group = geo.groups.find(g => triOffset >= g.start && triOffset < g.start + g.count)
+        if (group) {
+          idxStart = group.start
+          idxCount = group.count
+        }
+      }
+
+      if (geo.index) {
+        const src = geo.index.array
+        const arr = new (src.constructor)(idxCount)
+        for (let i = 0; i < idxCount; i++) arr[i] = src[idxStart + i]
+        subGeo.setIndex(new THREE.BufferAttribute(arr, 1))
+      } else {
+        subGeo.setDrawRange(idxStart, idxCount)
+      }
+
+      const overlay = new THREE.Mesh(subGeo, new THREE.MeshBasicMaterial({
+        color:               new THREE.Color(color),
+        transparent:         true,
+        opacity:             0.75,
+        polygonOffset:       true,
+        polygonOffsetFactor: offsetFactor,
+        polygonOffsetUnits:  offsetFactor,
+        side:                THREE.DoubleSide,
+        depthWrite:          false,
+      }))
+
+      mesh.updateWorldMatrix(true, false)
+      overlay.matrixAutoUpdate = false
+      overlay.matrix.copy(mesh.matrixWorld)
+      scene.add(overlay)
+      return overlay
+    }
+
+    const removeOverlay = (overlay) => {
+      if (!overlay || !scene) return
+      scene.remove(overlay)
+      Object.keys(overlay.geometry.attributes).forEach(k => overlay.geometry.deleteAttribute(k))
+      overlay.geometry.dispose()
+      overlay.material.dispose()
+    }
+
+    // ─── Selection management ─────────────────────────────────────────────────
+    const clearAllSelections = () => {
+      selections.forEach(s => removeOverlay(s.overlay))
+      selections = []
+      selectionLabel.value = ''
+    }
+
+    // Keep alias used by resetCamera
+    const deselectMesh = clearAllSelections
+
+    const updateSelectionLabel = () => {
+      if (selections.length === 0) {
+        selectionLabel.value = ''
+      } else if (selections.length === 1) {
+        selectionLabel.value = selections[0].meshName || `Group ${selections[0].groupIndex}`
+      } else {
+        selectionLabel.value = `${selections.length} faces selected`
+      }
+    }
+
+    const emitMultiSelection = () => {
+      const data = selections.map(s => ({
+        faceIndex:  s.faceIndex,
+        groupIndex: s.groupIndex,
+        meshName:   s.meshName,
+        objectName: s.objectName,
+        point:      s.point,
+        normal:     s.normal,
+        userData:   s.userData,
+      }))
+      emit('trigger-event', {
+        name:  'faces-selected',
+        event: { selections: data, count: data.length },
+      })
+      setMultiSelectionVar(data)
+    }
+
+    // ─── Annotation overlays ──────────────────────────────────────────────────
+    const clearAnnotationOverlays = () => {
+      annotationOverlays.forEach(a => removeOverlay(a.overlay))
+      annotationOverlays = []
+    }
+
+    const buildAnnotationOverlays = () => {
+      clearAnnotationOverlays()
+      if (!loadedModel || !raycaster || !scene) return
+
+      const annotations = processedAnnotations.value
+      if (!annotations.length) return
+
+      const epsilon = (modelRadius * 0.0001) || 0.001
+      const color   = props.content?.annotationColor || '#ff6b35'
+
+      for (const annotation of annotations) {
+        const pt = annotation.point
+        const nm = annotation.normal
+        if (!pt) continue
+
+        const nmVec = new THREE.Vector3(nm?.x ?? 0, nm?.y ?? 0, nm?.z ?? 0)
+        if (nmVec.lengthSq() < 0.0001) nmVec.set(0, 1, 0)
+        nmVec.normalize()
+
+        const ptVec = new THREE.Vector3(pt.x ?? 0, pt.y ?? 0, pt.z ?? 0)
+
+        // Primary: shoot from slightly above surface (normal side) inward
+        raycaster.set(ptVec.clone().addScaledVector(nmVec, epsilon), nmVec.clone().negate())
+        let hits = raycaster.intersectObjects(clickableMeshes, true)
+
+        // Fallback: shoot from slightly inside outward
+        if (!hits.length) {
+          raycaster.set(ptVec.clone().addScaledVector(nmVec, -epsilon), nmVec)
+          hits = raycaster.intersectObjects(clickableMeshes, true)
+        }
+
+        if (hits.length > 0) {
+          const hit      = hits[0]
+          const mesh     = hit.object
+          const fi       = hit.faceIndex ?? 0
+          const groupIdx = getGroupIndex(mesh, fi)
+          const overlay  = makeOverlayMesh(mesh, fi, color, -1)
+          annotationOverlays.push({ mesh, groupIndex: groupIdx, overlay, annotation })
+        }
+      }
+    }
+
     // ─── Main Three.js init ───────────────────────────────────────────────────
     const initThree = () => {
       const canvas = canvasRef.value
@@ -213,8 +402,8 @@ export default {
       renderer.setPixelRatio(Math.min(getWin().devicePixelRatio, 2))
       renderer.setClearColor(0x000000, 0)
       renderer.shadowMap.enabled = true
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap
-      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      renderer.shadowMap.type    = THREE.PCFSoftShadowMap
+      renderer.toneMapping       = THREE.ACESFilmicToneMapping
       renderer.toneMappingExposure = 1.1
 
       scene = new THREE.Scene()
@@ -226,9 +415,9 @@ export default {
       camera.lookAt(0, 0, 0)
 
       controls = new OrbitControls(camera, renderer.domElement)
-      controls.enableDamping   = false
+      controls.enableDamping      = false
       controls.screenSpacePanning = true
-      controls.enableZoom      = true
+      controls.enableZoom         = true
 
       // Three-point lighting
       scene.add(new THREE.AmbientLight(0xffffff, 0.65))
@@ -294,7 +483,8 @@ export default {
         disposeObject(loadedModel)
         loadedModel = null
       }
-      removeHighlight()
+      clearAllSelections()
+      clearAnnotationOverlays()
 
       try {
         const loader = new GLTFLoader()
@@ -306,7 +496,6 @@ export default {
         } else if (isHttpUrl(glbData)) {
           gltf = await new Promise((res, rej) => loader.load(glbData, res, undefined, rej))
         } else {
-          // Assume raw base64
           const buf = decodeBase64ToBuffer(glbData)
           gltf = await new Promise((res, rej) => loader.parse(buf, '', res, rej))
         }
@@ -314,17 +503,15 @@ export default {
         loadedModel = gltf.scene
         scene.add(loadedModel)
 
-        // Flush all child transforms before computing bounding box
+        clickableMeshes = []
+        loadedModel.traverse(obj => { if (obj.isMesh) clickableMeshes.push(obj) })
         loadedModel.updateMatrixWorld(true)
 
-        // Auto-fit camera using world-space bounding box center as orbit pivot
-        // precise:true iterates actual vertex positions for an accurate bbox
         const box    = new THREE.Box3().setFromObject(loadedModel, true)
         const center = box.getCenter(new THREE.Vector3())
         const size   = box.getSize(new THREE.Vector3())
         const maxDim = Math.max(size.x, size.y, size.z)
 
-        // DO NOT move loadedModel — use world-space center as controls.target
         modelRadius = maxDim * 0.6
 
         const fov  = camera.fov * (Math.PI / 180)
@@ -344,7 +531,6 @@ export default {
         defaultCameraPos = camera.position.clone()
         defaultTarget    = center.clone()
 
-        // Rebuild grid at model floor level
         if (gridHelper) { scene.remove(gridHelper); gridHelper.dispose(); gridHelper = null }
         if (props.content?.showGrid) {
           gridHelper = new THREE.GridHelper(maxDim * 2, 20, 0x888888, 0xcccccc)
@@ -352,7 +538,6 @@ export default {
           scene.add(gridHelper)
         }
 
-        // Count geometry stats for the trigger event
         let meshCount = 0, vertexCount = 0
         loadedModel.traverse((obj) => {
           if (obj.isMesh) {
@@ -363,6 +548,9 @@ export default {
 
         modelLoaded.value = true
 
+        // Build annotation overlays now that clickableMeshes is populated
+        buildAnnotationOverlays()
+
         emit('trigger-event', {
           name: 'model-loaded',
           event: {
@@ -371,7 +559,7 @@ export default {
             boundingBox: {
               min:  { x: box.min.x, y: box.min.y, z: box.min.z },
               max:  { x: box.max.x, y: box.max.y, z: box.max.z },
-              size: { x: size.x,  y: size.y,  z: size.z },
+              size: { x: size.x,   y: size.y,   z: size.z },
             },
           },
         })
@@ -383,75 +571,12 @@ export default {
       }
     }
 
-    // ─── Per-face highlight overlay ───────────────────────────────────────────
-    const selectFace = (mesh, faceIndex) => {
-      removeHighlight()
-      const geo = mesh.geometry
-      const subGeo = new THREE.BufferGeometry()
-
-      // Share (don't clone) vertex attributes — safe for static models
-      for (const [key, attr] of Object.entries(geo.attributes)) {
-        subGeo.setAttribute(key, attr)
-      }
-
-      // Find the group whose index-buffer range contains the hit triangle.
-      // faceIndex * 3 is the offset into the index buffer for that triangle.
-      let idxStart = 0
-      let idxCount = geo.index ? geo.index.count : (geo.attributes.position?.count ?? 0)
-
-      if (geo.groups?.length > 0 && geo.index) {
-        const triOffset = faceIndex * 3
-        const group = geo.groups.find(
-          g => triOffset >= g.start && triOffset < g.start + g.count
-        )
-        if (group) {
-          idxStart = group.start
-          idxCount = group.count
-        }
-      }
-
-      if (geo.index) {
-        const src = geo.index.array
-        const arr = new (src.constructor)(idxCount)
-        for (let i = 0; i < idxCount; i++) arr[i] = src[idxStart + i]
-        subGeo.setIndex(new THREE.BufferAttribute(arr, 1))
-      }
-
-      highlightOverlay = new THREE.Mesh(subGeo, new THREE.MeshBasicMaterial({
-        color: new THREE.Color(props.content?.selectionColor || '#1a73e8'),
-        transparent: true,
-        opacity: 0.75,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      }))
-
-      mesh.updateWorldMatrix(true, false)
-      highlightOverlay.matrixAutoUpdate = false
-      highlightOverlay.matrix.copy(mesh.matrixWorld)
-      scene.add(highlightOverlay)
-    }
-
-    const removeHighlight = () => {
-      if (!highlightOverlay) return
-      scene.remove(highlightOverlay)
-      // Clear attribute refs WITHOUT disposing shared geometry attributes
-      Object.keys(highlightOverlay.geometry.attributes).forEach(k =>
-        highlightOverlay.geometry.deleteAttribute(k))
-      highlightOverlay.geometry.dispose()
-      highlightOverlay.material.dispose()
-      highlightOverlay = null
-    }
-
     // ─── Canvas click → raycasting ────────────────────────────────────────────
     const onPointerDown = (event) => {
       pointerDownPos = { x: event.clientX, y: event.clientY }
     }
 
     const onCanvasClick = (event) => {
-      // Skip if this is a drag-release (pointer moved > 5 CSS px since pointerdown)
       if (pointerDownPos) {
         const dx = event.clientX - pointerDownPos.x
         const dy = event.clientY - pointerDownPos.y
@@ -469,35 +594,85 @@ export default {
       )
 
       raycaster.setFromCamera(mouse, camera)
-
-      const meshes = []
-      loadedModel.traverse((obj) => { if (obj.isMesh) meshes.push(obj) })
-      const hits = raycaster.intersectObjects(meshes, false)
+      const hits = raycaster.intersectObjects(clickableMeshes, true)
 
       if (hits.length > 0) {
-        const hit = hits[0]
-        selectFace(hit.object, hit.faceIndex ?? 0)
-        selectionLabel.value = hit.object.name || `Face ${hit.face?.materialIndex ?? hit.faceIndex}`
+        const hit      = hits[0]
+        const mesh     = hit.object
+        const fi       = hit.faceIndex ?? 0
+        const groupIdx = getGroupIndex(mesh, fi)
 
-        emit('trigger-event', {
-          name: 'face-selected',
-          event: {
-            faceIndex:  hit.faceIndex ?? 0,
-            groupIndex: hit.face?.materialIndex ?? 0,
-            meshName:   hit.object.name || '',
-            objectName: hit.object.parent?.name || hit.object.name || '',
-            point:  { x: hit.point.x, y: hit.point.y, z: hit.point.z },
-            normal: hit.face
-              ? { x: hit.face.normal.x, y: hit.face.normal.y, z: hit.face.normal.z }
-              : { x: 0, y: 0, z: 0 },
-            userData: hit.object.userData ?? {},
-          },
-        })
+        const point  = { x: hit.point.x, y: hit.point.y, z: hit.point.z }
+        const normal = hit.face
+          ? { x: hit.face.normal.x, y: hit.face.normal.y, z: hit.face.normal.z }
+          : { x: 0, y: 0, z: 0 }
+        const meshName   = mesh.name || ''
+        const objectName = mesh.parent?.name || mesh.name || ''
+        const userData   = mesh.userData ?? {}
+
+        // ── Annotation check ─────────────────────────────────────────────────
+        const matchedAnnotation = annotationOverlays.find(
+          a => a.mesh === mesh && a.groupIndex === groupIdx
+        )
+        if (matchedAnnotation) {
+          emit('trigger-event', {
+            name:  'annotation-clicked',
+            event: {
+              annotation: matchedAnnotation.annotation,
+              point:      matchedAnnotation.annotation.point,
+              normal:     matchedAnnotation.annotation.normal,
+            },
+          })
+        }
+
+        // ── Selection logic ───────────────────────────────────────────────────
+        if (isShiftHeld) {
+          // Toggle this face in/out of the multi-selection
+          const existingIdx = selections.findIndex(
+            s => s.mesh === mesh && s.groupIndex === groupIdx
+          )
+          if (existingIdx >= 0) {
+            removeOverlay(selections[existingIdx].overlay)
+            selections.splice(existingIdx, 1)
+          } else {
+            const overlay = makeOverlayMesh(mesh, fi, props.content?.selectionColor || '#1a73e8', -2)
+            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData })
+            emit('trigger-event', {
+              name:  'face-selected',
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData },
+            })
+          }
+        } else {
+          // Single-select: replace any existing selection
+          const alreadySingle =
+            selections.length === 1 &&
+            selections[0].mesh === mesh &&
+            selections[0].groupIndex === groupIdx
+
+          if (!alreadySingle) {
+            clearAllSelections()
+            const overlay = makeOverlayMesh(mesh, fi, props.content?.selectionColor || '#1a73e8', -2)
+            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData })
+            emit('trigger-event', {
+              name:  'face-selected',
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData },
+            })
+          }
+        }
+
+        updateSelectionLabel()
+        emitMultiSelection()
+
       } else {
-        removeHighlight()
-        selectionLabel.value = ''
+        // Clicked empty space — clear all selections
+        clearAllSelections()
+        emitMultiSelection()
       }
     }
+
+    // ─── Keyboard tracking (shift for multi-select) ───────────────────────────
+    const onKeyDown = (e) => { if (e.key === 'Shift') isShiftHeld = true }
+    const onKeyUp   = (e) => { if (e.key === 'Shift') isShiftHeld = false }
 
     // ─── File upload ──────────────────────────────────────────────────────────
     const triggerFileUpload = () => fileInputRef.value?.click()
@@ -512,7 +687,7 @@ export default {
     const onFileSelected = async (event) => {
       const file = event.target.files?.[0]
       if (!file) return
-      event.target.value = '' // allow re-selecting the same file
+      event.target.value = ''
       await loadFile(file)
     }
 
@@ -533,15 +708,15 @@ export default {
         endTarget:   defaultTarget ? defaultTarget.clone() : new THREE.Vector3(),
         progress:    0,
       }
-      removeHighlight()
-      selectionLabel.value = ''
+      deselectMesh()
     }
 
     const rotateDeg = (deg) => {
       if (!camera || !controls) return
       const angle  = (deg * Math.PI) / 180
       const offset = camera.position.clone().sub(controls.target)
-      const cos = Math.cos(angle), sin = Math.sin(angle)
+      const cos    = Math.cos(angle)
+      const sin    = Math.sin(angle)
       camera.position.set(
         controls.target.x + cos * offset.x + sin * offset.z,
         camera.position.y,
@@ -567,6 +742,14 @@ export default {
       }
     })
 
+    watch(() => props.content?.selectionColor, (color) => {
+      selections.forEach(s => s.overlay?.material?.color?.set(color || '#1a73e8'))
+    })
+
+    watch(() => props.content?.annotationColor, (color) => {
+      annotationOverlays.forEach(a => a.overlay?.material?.color?.set(color || '#ff6b35'))
+    })
+
     watch(() => props.content?.showGrid, (show) => {
       if (!scene) return
       if (show && !gridHelper) {
@@ -577,10 +760,18 @@ export default {
       }
     })
 
+    // Rebuild annotation overlays whenever the resolved annotation array changes
+    watch(processedAnnotations, () => {
+      if (libsReady.value && loadedModel) buildAnnotationOverlays()
+    }, { deep: true })
+
     // ─── Lifecycle ────────────────────────────────────────────────────────────
     onMounted(async () => {
       isLoading.value  = true
       loadingMsg.value = 'Initializing viewer…'
+      const win = getWin()
+      win.addEventListener('keydown', onKeyDown)
+      win.addEventListener('keyup',   onKeyUp)
       try {
         await loadLibs()
         libsReady.value = true
@@ -595,10 +786,14 @@ export default {
     })
 
     onBeforeUnmount(() => {
+      const win = getWin()
+      win.removeEventListener('keydown', onKeyDown)
+      win.removeEventListener('keyup',   onKeyUp)
       cancelAnimationFrame(animFrameId)
       resizeObserver?.disconnect()
       controls?.dispose()
-      removeHighlight()
+      clearAllSelections()
+      clearAnnotationOverlays()
       if (loadedModel) disposeObject(loadedModel)
       if (renderer) { renderer.dispose(); renderer.forceContextLoss() }
     })
