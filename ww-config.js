@@ -154,6 +154,11 @@ export default {
         point:  { x: 0, y: 0, z: 0 },
         normal: { x: 0, y: 0, z: 0 },
         userData: {},
+        faceType: '',     // 'cylindrical' | 'planar' | 'unknown'
+        shape:    null,   // 'circular' | 'other' | null  (planar faces only)
+        diameter: null,   // number | null  (model units)
+        depth:    null,   // number | null  (cylindrical faces only)
+        axis:     null,   // {x,y,z} | null  (cylinder axis or face normal)
       },
       default: true,
     },
@@ -161,7 +166,7 @@ export default {
       name: 'faces-selected',
       label: { en: 'On Selection Changed' },
       event: {
-        selections: [],
+        selections: [],   // each item includes all face-selected fields above
         count: 0,
       },
     },

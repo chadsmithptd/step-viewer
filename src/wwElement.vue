@@ -248,6 +248,114 @@ export default {
       return 0
     }
 
+    // ─── Face geometry analysis ───────────────────────────────────────────────
+    // Classifies the clicked face and computes diameter/depth for cylindrical faces.
+    const analyzeFaceGeometry = (mesh, faceIndex) => {
+      const geo     = mesh.geometry
+      const posAttr = geo.attributes.position
+      const normAttr = geo.attributes.normal
+      if (!posAttr || posAttr.count < 3) return { faceType: 'unknown', diameter: null, depth: null, axis: null }
+
+      // Determine index range for the clicked group
+      let idxStart = 0
+      let idxCount = geo.index ? geo.index.count : posAttr.count
+      if (geo.groups?.length > 0) {
+        const triOffset = faceIndex * 3
+        const group = geo.groups.find(g => triOffset >= g.start && triOffset < g.start + g.count)
+        if (group) { idxStart = group.start; idxCount = group.count }
+      }
+
+      // Collect unique vertex indices then sample up to 128
+      const raw = []
+      if (geo.index) {
+        const arr = geo.index.array
+        for (let i = idxStart; i < idxStart + idxCount; i++) raw.push(arr[i])
+      } else {
+        for (let i = idxStart; i < idxStart + idxCount; i++) raw.push(i)
+      }
+      const unique  = [...new Set(raw)]
+      const step    = Math.max(1, Math.floor(unique.length / 128))
+      const sampled = unique.filter((_, i) => i % step === 0)
+
+      // World-space positions and normals
+      mesh.updateWorldMatrix(true, false)
+      const wm = mesh.matrixWorld
+      const nm = new THREE.Matrix3().getNormalMatrix(wm)
+
+      const positions = sampled.map(i =>
+        new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).applyMatrix4(wm)
+      )
+      const normals = normAttr
+        ? sampled.map(i =>
+            new THREE.Vector3(normAttr.getX(i), normAttr.getY(i), normAttr.getZ(i))
+              .applyMatrix3(nm).normalize()
+          )
+        : []
+
+      if (positions.length < 3) return { faceType: 'unknown', diameter: null, depth: null, axis: null }
+
+      // Centroid
+      const centroid = new THREE.Vector3()
+      positions.forEach(p => centroid.add(p))
+      centroid.divideScalar(positions.length)
+
+      const round = v => Math.round(v * 1000) / 1000
+
+      // ── Classify via normal variance ────────────────────────────────────────
+      if (normals.length >= 4) {
+        const n0 = normals[0].clone().normalize()
+        const allParallel = normals.every(n => Math.abs(n.dot(n0)) > 0.97)
+
+        if (!allParallel) {
+          // Find cylinder axis: cross product of two non-parallel normals
+          let axisVec = null
+          for (let i = 1; i < normals.length; i++) {
+            const cross = n0.clone().cross(normals[i])
+            if (cross.length() > 0.15) { axisVec = cross.normalize(); break }
+          }
+
+          if (axisVec) {
+            // Confirm all normals are perpendicular to the axis (radial)
+            const isCylindrical = normals.every(n => Math.abs(n.dot(axisVec)) < 0.3)
+            if (isCylindrical) {
+              const axialVals = positions.map(p => p.clone().sub(centroid).dot(axisVec))
+              const radii = positions.map(p => {
+                const v   = p.clone().sub(centroid)
+                const axC = axisVec.clone().multiplyScalar(v.dot(axisVec))
+                return v.sub(axC).length()
+              })
+              const radius = radii.reduce((a, b) => a + b, 0) / radii.length
+              const depth  = Math.max(...axialVals) - Math.min(...axialVals)
+              return {
+                faceType: 'cylindrical',
+                diameter: round(radius * 2),
+                depth:    round(depth),
+                axis:     { x: round(axisVec.x), y: round(axisVec.y), z: round(axisVec.z) },
+              }
+            }
+          }
+        }
+
+        if (allParallel) {
+          // Planar face — check if boundary is circular
+          const dists = positions.map(p => p.distanceTo(centroid))
+          const maxD  = Math.max(...dists)
+          const avgD  = dists.reduce((a, b) => a + b, 0) / dists.length
+          const stdD  = Math.sqrt(dists.reduce((a, d) => a + (d - avgD) ** 2, 0) / dists.length)
+          const isCircular = avgD > 0 && (stdD / avgD) < 0.35
+          return {
+            faceType: 'planar',
+            shape:    isCircular ? 'circular' : 'other',
+            diameter: isCircular ? round(maxD * 2) : null,
+            depth:    null,
+            axis:     { x: round(n0.x), y: round(n0.y), z: round(n0.z) },
+          }
+        }
+      }
+
+      return { faceType: 'unknown', diameter: null, depth: null, axis: null }
+    }
+
     // Build a sub-geometry overlay mesh that covers only the group containing faceIndex.
     // offsetFactor: -1 for annotations (below), -2 for selections (above annotations).
     const makeOverlayMesh = (mesh, faceIndex, color, offsetFactor = -2) => {
@@ -335,6 +443,11 @@ export default {
         point:      s.point,
         normal:     s.normal,
         userData:   s.userData,
+        faceType:   s.faceType,
+        shape:      s.shape ?? null,
+        diameter:   s.diameter ?? null,
+        depth:      s.depth ?? null,
+        axis:       s.axis ?? null,
       }))
       emit('trigger-event', {
         name:  'faces-selected',
@@ -610,6 +723,8 @@ export default {
         const objectName = mesh.parent?.name || mesh.name || ''
         const userData   = mesh.userData ?? {}
 
+        const faceGeometry = analyzeFaceGeometry(mesh, fi)
+
         // ── Annotation check ─────────────────────────────────────────────────
         const matchedAnnotation = annotationOverlays.find(
           a => a.mesh === mesh && a.groupIndex === groupIdx
@@ -636,10 +751,10 @@ export default {
             selections.splice(existingIdx, 1)
           } else {
             const overlay = makeOverlayMesh(mesh, fi, props.content?.selectionColor || '#1a73e8', -2)
-            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData })
+            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry })
             emit('trigger-event', {
               name:  'face-selected',
-              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData },
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry },
             })
           }
         } else {
@@ -652,10 +767,10 @@ export default {
           if (!alreadySingle) {
             clearAllSelections()
             const overlay = makeOverlayMesh(mesh, fi, props.content?.selectionColor || '#1a73e8', -2)
-            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData })
+            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry })
             emit('trigger-event', {
               name:  'face-selected',
-              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData },
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry },
             })
           }
         }
