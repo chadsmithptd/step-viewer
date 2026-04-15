@@ -241,7 +241,7 @@ export default {
 
     let defaultCameraPos     = null
     let defaultTarget        = null
-    let focusedHoleOverlay   = null
+    let focusedHoleOverlays  = []
 
     // ─── Computed ─────────────────────────────────────────────────────────────
     const rootStyle = computed(() => ({
@@ -499,6 +499,114 @@ export default {
       }
 
       return results
+    }
+
+    // ─── Merge split cylinders ────────────────────────────────────────────────
+    // B-Rep kernels often split a single cylindrical hole into two 180° half-faces
+    // at the parametric seam, or more pieces at feature intersections. This pass
+    // groups faces that share the same diameter (±3%), parallel axis (dot > 0.95),
+    // and overlapping radial position, then promotes the group to isHole:true when
+    // combined arc coverage exceeds 300°.
+    const mergeCylinders = (cylinders) => {
+      if (!cylinders.length) return cylinders
+
+      const round = v => Math.round(v * 1000) / 1000
+
+      // Flip axis so the largest absolute component is always positive → consistent comparison
+      const canonAxis = a => {
+        const ax = Math.abs(a.x), ay = Math.abs(a.y), az = Math.abs(a.z)
+        const flip = ay >= ax && ay >= az ? a.y < 0
+          : ax >= ay && ax >= az         ? a.x < 0
+          : a.z < 0
+        return flip ? { x: -a.x, y: -a.y, z: -a.z } : { ...a }
+      }
+
+      const axisMatch = (a1, a2) => {
+        const n1 = canonAxis(a1), n2 = canonAxis(a2)
+        return (n1.x*n2.x + n1.y*n2.y + n1.z*n2.z) > 0.95
+      }
+
+      const diamMatch = (d1, d2) =>
+        d1 && d2 && Math.abs(d1 - d2) / Math.max(d1, d2) < 0.03
+
+      // Distance between two centers perpendicular to the axis (same-hole test)
+      const radialDist = (c1, c2, ax) => {
+        if (!c1 || !c2) return Infinity
+        const dx = c2.x-c1.x, dy = c2.y-c1.y, dz = c2.z-c1.z
+        const proj = dx*ax.x + dy*ax.y + dz*ax.z
+        const rx = dx - proj*ax.x, ry = dy - proj*ax.y, rz = dz - proj*ax.z
+        return Math.sqrt(rx*rx + ry*ry + rz*rz)
+      }
+
+      const used   = new Set()
+      const merged = []
+
+      for (let i = 0; i < cylinders.length; i++) {
+        if (used.has(i)) continue
+        const base = cylinders[i]
+        if (!base.diameter || !base.axis) { merged.push(base); used.add(i); continue }
+
+        const normAx = canonAxis(base.axis)
+        const group  = [i]
+
+        for (let j = i + 1; j < cylinders.length; j++) {
+          if (used.has(j)) continue
+          const cand = cylinders[j]
+          if (!cand.diameter || !cand.axis) continue
+          if (
+            diamMatch(base.diameter, cand.diameter) &&
+            axisMatch(base.axis, cand.axis) &&
+            radialDist(base.center, cand.center, normAx) < base.diameter * 0.3
+          ) group.push(j)
+        }
+
+        group.forEach(idx => used.add(idx))
+
+        if (group.length === 1) { merged.push(base); continue }
+
+        // ── Merge the group ────────────────────────────────────────────────
+        const members   = group.map(idx => cylinders[idx])
+        const totalArc  = Math.min(360, members.reduce((s, m) => s + (m.arcDeg || 0), 0))
+        const avgDiam   = round(members.reduce((s, m) => s + (m.diameter || 0), 0) / members.length)
+
+        // Axial extent: project each center along axis ± half its own depth
+        const axialVals = members.flatMap(m => {
+          if (!m.center) return []
+          const t = m.center.x*normAx.x + m.center.y*normAx.y + m.center.z*normAx.z
+          const h = (m.depth || 0) / 2
+          return [t - h, t + h]
+        })
+        const mergedDepth = axialVals.length
+          ? round(Math.max(...axialVals) - Math.min(...axialVals))
+          : base.depth
+
+        const valid = members.filter(m => m.center)
+        const mergedCenter = valid.length ? {
+          x: round(valid.reduce((s, m) => s + m.center.x, 0) / valid.length),
+          y: round(valid.reduce((s, m) => s + m.center.y, 0) / valid.length),
+          z: round(valid.reduce((s, m) => s + m.center.z, 0) / valid.length),
+        } : base.center
+
+        // A merged group is a hole when all parts are concave AND arc ≥ 300°
+        const allConcave  = members.every(m => m.isHole !== false)
+        const isMergedHole = allConcave && totalArc >= 300
+
+        merged.push({
+          meshName:    members[0].meshName,
+          meshNames:   members.map(m => m.meshName),
+          objectName:  base.objectName,
+          diameter:    avgDiam,
+          depth:       mergedDepth,
+          axis:        { x: round(normAx.x), y: round(normAx.y), z: round(normAx.z) },
+          center:      mergedCenter,
+          arcDeg:      totalArc,
+          isHole:      isMergedHole,
+          merged:      true,
+          mergedCount: group.length,
+        })
+      }
+
+      return merged
     }
 
     // ─── All-faces list (runs once on load) ───────────────────────────────────
@@ -1018,7 +1126,8 @@ export default {
     }
 
     const clearFocusedHoleOverlay = () => {
-      if (focusedHoleOverlay) { removeOverlay(focusedHoleOverlay); focusedHoleOverlay = null }
+      focusedHoleOverlays.forEach(o => removeOverlay(o))
+      focusedHoleOverlays = []
     }
 
     // ─── Annotation overlays ──────────────────────────────────────────────────
@@ -1240,8 +1349,8 @@ export default {
         // Build annotation overlays now that clickableMeshes is populated
         buildAnnotationOverlays()
 
-        // Scan all faces for cylindrical geometry and emit holes manifest
-        const cylinders = analyzeAllFaces()
+        // Scan all faces for cylindrical geometry, merge split half-faces, emit holes manifest
+        const cylinders = mergeCylinders(analyzeAllFaces())
         const holeCount = cylinders.filter(c => c.isHole === true).length
         const bossCount = cylinders.filter(c => c.isHole === false).length
         setHolesVar(cylinders)
@@ -1470,11 +1579,12 @@ export default {
         progress:    0,
       }
 
-      // Highlight the hole with the configured color
+      // Highlight all constituent meshes (merged holes span multiple meshes)
       clearFocusedHoleOverlay()
-      const mesh = clickableMeshes.find(m => m.name === hole.meshName)
-      if (mesh) {
-        focusedHoleOverlay = makeOverlayMesh(mesh, 0, props.content?.focusedHoleColor || '#ffcc00', -3)
+      const names = Array.isArray(hole.meshNames) ? hole.meshNames : [hole.meshName].filter(Boolean)
+      for (const name of names) {
+        const mesh = clickableMeshes.find(m => m.name === name)
+        if (mesh) focusedHoleOverlays.push(makeOverlayMesh(mesh, 0, props.content?.focusedHoleColor || '#ffcc00', -3))
       }
     }
 
@@ -1498,7 +1608,7 @@ export default {
     })
 
     watch(() => props.content?.focusedHoleColor, (color) => {
-      if (focusedHoleOverlay) focusedHoleOverlay.material.color.set(color || '#ffcc00')
+      focusedHoleOverlays.forEach(o => o.material.color.set(color || '#ffcc00'))
     })
 
     watch(() => props.content?.backgroundColor, (color) => {
