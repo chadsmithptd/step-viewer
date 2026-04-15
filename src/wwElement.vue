@@ -184,6 +184,26 @@ export default {
       : null
     const setPartPropertiesVar = (val) => _wwPartPropsVar?.setValue?.(val)
 
+    const _wwCenterVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'centerOfRotation',
+          type:         'object',
+          defaultValue: { x: 0, y: 0, z: 0 },
+        })
+      : null
+    const setCenterOfRotationVar = (val) => _wwCenterVar?.setValue?.(val)
+
+    const _wwFacesVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'faces',
+          type:         'array',
+          defaultValue: [],
+        })
+      : null
+    const setFacesVar = (val) => _wwFacesVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -201,8 +221,9 @@ export default {
     // Annotation overlays: [{mesh, groupIndex, overlay, annotation}]
     let annotationOverlays = []
 
-    let modelRadius    = 5
-    let snapAnim       = null
+    let modelRadius           = 5
+    let snapAnim              = null
+    let controlsChangeHandler = null
     let pointerDownPos = null
     let isShiftHeld    = false
 
@@ -336,6 +357,11 @@ export default {
           }
 
           if (axisVec) {
+            // Dot products of all normals against the axis candidate
+            const dots     = normals.map(n => n.dot(axisVec))
+            const meanDot  = dots.reduce((a, b) => a + b, 0) / dots.length
+            const stdDot   = Math.sqrt(dots.reduce((a, d) => a + (d - meanDot) ** 2, 0) / dots.length)
+
             // Confirm all normals are perpendicular to the axis (radial)
             const isCylindrical = normals.every(n => Math.abs(n.dot(axisVec)) < 0.3)
             if (isCylindrical) {
@@ -371,6 +397,20 @@ export default {
                 _centroid: centroid,
               }
             }
+
+            // Normals at a constant non-zero angle to the axis → cone
+            if (stdDot < 0.12 && Math.abs(meanDot) > 0.1) {
+              const halfAngle = Math.round(Math.acos(Math.min(1, Math.abs(meanDot))) * 180 / Math.PI)
+              return {
+                faceType:  'conical',
+                halfAngle,
+                axis:      { x: round(axisVec.x), y: round(axisVec.y), z: round(axisVec.z) },
+                _centroid: centroid,
+              }
+            }
+
+            // Normals vary in angle to a consistent axis → torus (fillet / blend surface)
+            return { faceType: 'toroidal', _centroid: centroid }
           }
         }
 
@@ -447,6 +487,41 @@ export default {
       }
 
       return results
+    }
+
+    // ─── All-faces list (runs once on load) ───────────────────────────────────
+    // Classifies every face mesh and returns a flat list with surfaceType string.
+    const buildFacesList = () => {
+      const typeLabel = {
+        planar:     'Plane',
+        cylindrical:'Cylinder',
+        conical:    'Cone',
+        toroidal:   'Torus',
+        unknown:    'Unknown',
+      }
+      const list = []
+      for (const mesh of clickableMeshes) {
+        const geo    = mesh.geometry
+        const groups = geo.groups?.length > 0
+          ? geo.groups
+          : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes?.position?.count ?? 0 }]
+
+        for (const group of groups) {
+          const result = analyzeFaceGeometry(mesh, Math.floor(group.start / 3))
+          list.push({
+            meshName:    mesh.name || '',
+            objectName:  mesh.parent?.name || mesh.name || '',
+            surfaceType: typeLabel[result.faceType] ?? 'Unknown',
+            // Include extra fields for Cylinder and Cone — useful for downstream logic
+            diameter:    result.diameter   ?? null,
+            depth:       result.depth      ?? null,
+            halfAngle:   result.halfAngle  ?? null,
+            arcDeg:      result.arcDeg     ?? null,
+            axis:        result.axis       ?? null,
+          })
+        }
+      }
+      return list
     }
 
     // ─── Part-level geometry analysis (surface area + volume) ────────────────
@@ -703,6 +778,13 @@ export default {
 
       raycaster = new THREE.Raycaster()
 
+      // Keep centerOfRotation variable in sync with orbit target
+      controlsChangeHandler = () => {
+        const r = v => Math.round(v * 1000) / 1000
+        setCenterOfRotationVar({ x: r(controls.target.x), y: r(controls.target.y), z: r(controls.target.z) })
+      }
+      controls.addEventListener('change', controlsChangeHandler)
+
       resizeObserver = new ResizeObserver(onResize)
       resizeObserver.observe(rootRef.value)
 
@@ -830,6 +912,9 @@ export default {
           name:  'holes-detected',
           event: { cylinders, holeCount, bossCount },
         })
+
+        // Classify every face and expose as a variable
+        setFacesVar(buildFacesList())
 
         // Compute surface area, volume, and bounding box
         const partProps = analyzeModelGeometry(box)
@@ -1059,6 +1144,12 @@ export default {
       if (hole && libsReady.value && loadedModel) focusOnHole(hole)
     }, { deep: true })
 
+    watch(() => props.content?.centerOfRotation, (pos) => {
+      if (!controls || pos?.x === undefined) return
+      controls.target.set(pos.x ?? 0, pos.y ?? 0, pos.z ?? 0)
+      controls.update()
+    }, { deep: true })
+
     watch(() => props.content?.focusedHoleColor, (color) => {
       if (focusedHoleOverlay) focusedHoleOverlay.material.color.set(color || '#ffcc00')
     })
@@ -1123,6 +1214,7 @@ export default {
       win.removeEventListener('keyup',   onKeyUp)
       cancelAnimationFrame(animFrameId)
       resizeObserver?.disconnect()
+      if (controls && controlsChangeHandler) controls.removeEventListener('change', controlsChangeHandler)
       controls?.dispose()
       clearAllSelections()
       clearAnnotationOverlays()

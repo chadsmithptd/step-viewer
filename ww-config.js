@@ -19,6 +19,21 @@ export default {
       /* wwEditor:end */
     },
 
+    centerOfRotation: {
+      label: { en: 'Center of Rotation' },
+      type: 'Object',
+      section: 'settings',
+      bindable: true,
+      defaultValue: null,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'object',
+        tooltip: 'Object with x, y, z properties. When bound and changed, moves the orbit pivot to that point.',
+      },
+      propertyHelp: 'Bind a variable to read the live orbit center, or set it to programmatically move the pivot.',
+      /* wwEditor:end */
+    },
+
     focusedHole: {
       label: { en: 'Focused Hole' },
       type: 'Object',
@@ -225,12 +240,10 @@ export default {
       event: {
         meshCount:   0,
         vertexCount: 0,
-        surfaceArea: 0,   // total surface area in model units²
-        volume:      0,   // total volume in model units³ (requires closed solid)
-        boundingBox: {
-          min: {}, max: {},
-          width: 0, height: 0, depth: 0,
-        },
+        surfaceArea: 0,    // total surface area in model units²
+        volume:      0,    // total volume in model units³ (requires closed solid)
+        boundingBox: { min: {}, max: {}, width: 0, height: 0, depth: 0 },
+        // faces list available via the 'faces' internal variable (may be large — not inlined here)
       },
     },
   ],
