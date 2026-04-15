@@ -467,7 +467,8 @@ export default {
           if (result.faceType !== 'cylindrical') continue
 
           // Hole vs boss: dot(centroid − vertex, normal) > 0 → concave (hole)
-          let isHole = null
+          let isConcave = null
+          let isHole    = null
           if (result._centroid) {
             const posAttr  = geo.attributes.position
             const normAttr = geo.attributes.normal
@@ -478,9 +479,11 @@ export default {
               const vi  = geo.index ? geo.index.array[group.start] : group.start
               const pos = new THREE.Vector3(posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)).applyMatrix4(wm)
               const nor = new THREE.Vector3(normAttr.getX(vi), normAttr.getY(vi), normAttr.getZ(vi)).applyMatrix3(nm).normalize()
-              // Concave (normals point toward axis center) AND full 360° wrap = true hole
-              const isConcave = result._centroid.clone().sub(pos).dot(nor) > 0
-              isHole = isConcave && (result.is360 === true)
+              // Concave (normals point toward axis center) → candidate hole piece.
+              // A single piece only qualifies as a full hole if it wraps the full 360°;
+              // partial arcs are promoted later by mergeCylinders when their combined arc ≥ 300°.
+              isConcave = result._centroid.clone().sub(pos).dot(nor) > 0
+              isHole    = isConcave && (result.is360 === true)
             }
           }
 
@@ -493,6 +496,7 @@ export default {
             axis:       result.axis,
             center:     c ? { x: round(c.x), y: round(c.y), z: round(c.z) } : null,
             arcDeg:     result.arcDeg ?? null,
+            isConcave,
             isHole,
           })
         }
@@ -526,16 +530,22 @@ export default {
         return (n1.x*n2.x + n1.y*n2.y + n1.z*n2.z) > 0.95
       }
 
+      // Partial-arc diameters are biased by the centroid-based radius formula
+      // (a 180° half reports ~0.82× the true radius). Loosened to 8% to tolerate
+      // that bias while still rejecting genuinely different cylinders.
       const diamMatch = (d1, d2) =>
-        d1 && d2 && Math.abs(d1 - d2) / Math.max(d1, d2) < 0.03
+        d1 && d2 && Math.abs(d1 - d2) / Math.max(d1, d2) < 0.08
 
-      // Distance between two centers perpendicular to the axis (same-hole test)
-      const radialDist = (c1, c2, ax) => {
-        if (!c1 || !c2) return Infinity
+      // Decompose (c2 - c1) into axial (parallel to axis) and radial (perp) components.
+      const decomposeCenters = (c1, c2, ax) => {
+        if (!c1 || !c2) return null
         const dx = c2.x-c1.x, dy = c2.y-c1.y, dz = c2.z-c1.z
         const proj = dx*ax.x + dy*ax.y + dz*ax.z
         const rx = dx - proj*ax.x, ry = dy - proj*ax.y, rz = dz - proj*ax.z
-        return Math.sqrt(rx*rx + ry*ry + rz*rz)
+        return {
+          axial:  Math.abs(proj),
+          radial: Math.sqrt(rx*rx + ry*ry + rz*rz),
+        }
       }
 
       const used   = new Set()
@@ -553,11 +563,21 @@ export default {
           if (used.has(j)) continue
           const cand = cylinders[j]
           if (!cand.diameter || !cand.axis) continue
-          if (
-            diamMatch(base.diameter, cand.diameter) &&
-            axisMatch(base.axis, cand.axis) &&
-            radialDist(base.center, cand.center, normAx) < base.diameter * 0.3
-          ) group.push(j)
+          if (!diamMatch(base.diameter, cand.diameter)) continue
+          if (!axisMatch(base.axis, cand.axis)) continue
+
+          // Same hole = same axial position along the shared axis. Face
+          // centroids of split halves sit off-axis (~0.637·R) on opposite
+          // sides, so the OLD radial check wrongly rejected true matches —
+          // use axial proximity plus a loose radial sanity bound (≤ 1·D)
+          // so distant cylinders on the same line aren't merged.
+          const d = decomposeCenters(base.center, cand.center, normAx)
+          if (!d) continue
+          const axialTol = Math.max(base.depth || 0, cand.depth || 0) * 0.6 + base.diameter * 0.1
+          if (d.axial  > axialTol)            continue
+          if (d.radial > base.diameter * 1.0) continue
+
+          group.push(j)
         }
 
         group.forEach(idx => used.add(idx))
@@ -587,8 +607,11 @@ export default {
           z: round(valid.reduce((s, m) => s + m.center.z, 0) / valid.length),
         } : base.center
 
-        // A merged group is a hole when all parts are concave AND arc ≥ 300°
-        const allConcave  = members.every(m => m.isHole !== false)
+        // A merged group is a hole when every piece is concave AND combined
+        // arc ≥ 300°. Previously this checked `isHole !== false`, but split
+        // halves have isHole === false (is360 is false per-piece), so the
+        // check was always failing for the exact case it was meant to rescue.
+        const allConcave   = members.every(m => m.isConcave === true)
         const isMergedHole = allConcave && totalArc >= 300
 
         merged.push({
@@ -600,6 +623,7 @@ export default {
           axis:        { x: round(normAx.x), y: round(normAx.y), z: round(normAx.z) },
           center:      mergedCenter,
           arcDeg:      totalArc,
+          isConcave:   allConcave,
           isHole:      isMergedHole,
           merged:      true,
           mergedCount: group.length,
