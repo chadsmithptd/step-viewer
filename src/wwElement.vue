@@ -234,6 +234,8 @@ export default {
     let modelRadius           = 5
     let snapAnim              = null
     let controlsChangeHandler = null
+    let originalMaterials     = new Map()   // mesh → original material(s)
+    let overrideMaterials     = []          // disposable override materials
     let pointerDownPos = null
     let isShiftHeld    = false
 
@@ -979,6 +981,42 @@ export default {
       setMultiSelectionVar(data)
     }
 
+    // ─── Color override ───────────────────────────────────────────────────────
+    const storeOriginalMaterials = () => {
+      originalMaterials.clear()
+      loadedModel?.traverse(obj => {
+        if (!obj.isMesh) return
+        originalMaterials.set(obj, Array.isArray(obj.material) ? [...obj.material] : obj.material)
+      })
+    }
+
+    const applyColorOverride = (color) => {
+      if (!loadedModel) return
+      overrideMaterials.forEach(m => m.dispose())
+      overrideMaterials = []
+      loadedModel.traverse(obj => {
+        if (!obj.isMesh) return
+        const mat = new THREE.MeshStandardMaterial({
+          color:     new THREE.Color(color || '#cccccc'),
+          roughness: 0.35,
+          metalness: 0.1,
+        })
+        obj.material = mat
+        overrideMaterials.push(mat)
+      })
+    }
+
+    const removeColorOverride = () => {
+      if (!loadedModel) return
+      loadedModel.traverse(obj => {
+        if (!obj.isMesh) return
+        const orig = originalMaterials.get(obj)
+        if (orig !== undefined) obj.material = orig
+      })
+      overrideMaterials.forEach(m => m.dispose())
+      overrideMaterials = []
+    }
+
     const clearFocusedHoleOverlay = () => {
       if (focusedHoleOverlay) { removeOverlay(focusedHoleOverlay); focusedHoleOverlay = null }
     }
@@ -1154,6 +1192,9 @@ export default {
         clickableMeshes = []
         loadedModel.traverse(obj => { if (obj.isMesh) clickableMeshes.push(obj) })
         loadedModel.updateMatrixWorld(true)
+
+        storeOriginalMaterials()
+        if (props.content?.overrideColor) applyColorOverride(props.content?.modelColor || '#cccccc')
 
         const box    = new THREE.Box3().setFromObject(loadedModel, true)
         const center = box.getCenter(new THREE.Vector3())
@@ -1450,6 +1491,12 @@ export default {
       controls.update()
     }, { deep: true })
 
+    watch(() => [props.content?.overrideColor, props.content?.modelColor], ([override, color]) => {
+      if (!loadedModel) return
+      if (override) applyColorOverride(color || '#cccccc')
+      else removeColorOverride()
+    })
+
     watch(() => props.content?.focusedHoleColor, (color) => {
       if (focusedHoleOverlay) focusedHoleOverlay.material.color.set(color || '#ffcc00')
     })
@@ -1519,6 +1566,8 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
+      overrideMaterials.forEach(m => m.dispose())
+      overrideMaterials = []
       if (loadedModel) disposeObject(loadedModel)
       if (renderer) { renderer.dispose(); renderer.forceContextLoss() }
     })

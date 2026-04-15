@@ -129,6 +129,35 @@ export default {
       /* wwEditor:end */
     },
 
+    overrideColor: {
+      label: { en: 'Override Model Color' },
+      type: 'OnOff',
+      section: 'style',
+      bindable: true,
+      defaultValue: false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'When on, replaces all GLB materials with a single uniform color',
+      },
+      /* wwEditor:end */
+    },
+
+    modelColor: {
+      label: { en: 'Model Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#cccccc',
+      hidden: content => !content?.overrideColor,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Uniform color applied to all mesh surfaces when Override Model Color is on',
+      },
+      /* wwEditor:end */
+    },
+
     focusedHoleColor: {
       label: { en: 'Focused Hole Color' },
       type: 'Color',
