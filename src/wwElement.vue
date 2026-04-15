@@ -951,16 +951,31 @@ export default {
       // Pick the axis direction that faces the camera's current side for a natural transition
       if (axisVec.dot(camera.position.clone().sub(center)) < 0) axisVec.negate()
 
-      // Base distance scaled to hole size, then pulled back an extra 50%
+      // Pull back 80% beyond the ideal viewing distance
       const viewDist = Math.max(
         (hole.diameter || 10) * 3,
         (hole.depth    || 10) * 2,
         modelRadius    * 0.3
-      ) * 1.5
+      ) * 1.8
+
+      const endPos = center.clone().addScaledVector(axisVec, viewDist)
+
+      // Set camera.up so OrbitControls doesn't flip the part.
+      // View direction points from endPos toward center (= -axisVec).
+      // Prefer world Z as up (common STEP/CAD convention); fall back to world Y
+      // when the view is nearly parallel to Z to avoid a degenerate up vector.
+      const viewDir = axisVec.clone().negate()
+      const worldZ  = new THREE.Vector3(0, 0, 1)
+      const worldY  = new THREE.Vector3(0, 1, 0)
+      const ref     = Math.abs(viewDir.dot(worldZ)) < 0.9 ? worldZ : worldY
+      const upVec   = ref.clone()
+        .sub(viewDir.clone().multiplyScalar(ref.dot(viewDir)))
+        .normalize()
+      camera.up.copy(upVec)
 
       snapAnim = {
         startPos:    camera.position.clone(),
-        endPos:      center.clone().addScaledVector(axisVec, viewDist),
+        endPos,
         startTarget: controls.target.clone(),
         endTarget:   center.clone(),
         progress:    0,
