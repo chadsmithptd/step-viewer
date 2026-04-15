@@ -196,8 +196,9 @@ export default {
     let pointerDownPos = null
     let isShiftHeld    = false
 
-    let defaultCameraPos = null
-    let defaultTarget    = null
+    let defaultCameraPos     = null
+    let defaultTarget        = null
+    let focusedHoleOverlay   = null
 
     // ─── Computed ─────────────────────────────────────────────────────────────
     const rootStyle = computed(() => ({
@@ -519,6 +520,10 @@ export default {
       setMultiSelectionVar(data)
     }
 
+    const clearFocusedHoleOverlay = () => {
+      if (focusedHoleOverlay) { removeOverlay(focusedHoleOverlay); focusedHoleOverlay = null }
+    }
+
     // ─── Annotation overlays ──────────────────────────────────────────────────
     const clearAnnotationOverlays = () => {
       annotationOverlays.forEach(a => removeOverlay(a.overlay))
@@ -661,6 +666,7 @@ export default {
       }
       clearAllSelections()
       clearAnnotationOverlays()
+      clearFocusedHoleOverlay()
 
       try {
         const loader = new GLTFLoader()
@@ -926,11 +932,12 @@ export default {
       // Pick the axis direction that faces the camera's current side for a natural transition
       if (axisVec.dot(camera.position.clone().sub(center)) < 0) axisVec.negate()
 
+      // Base distance scaled to hole size, then pulled back an extra 50%
       const viewDist = Math.max(
         (hole.diameter || 10) * 3,
         (hole.depth    || 10) * 2,
         modelRadius    * 0.3
-      )
+      ) * 1.5
 
       snapAnim = {
         startPos:    camera.position.clone(),
@@ -938,6 +945,13 @@ export default {
         startTarget: controls.target.clone(),
         endTarget:   center.clone(),
         progress:    0,
+      }
+
+      // Highlight the hole with the configured color
+      clearFocusedHoleOverlay()
+      const mesh = clickableMeshes.find(m => m.name === hole.meshName)
+      if (mesh) {
+        focusedHoleOverlay = makeOverlayMesh(mesh, 0, props.content?.focusedHoleColor || '#ffcc00', -3)
       }
     }
 
@@ -947,6 +961,10 @@ export default {
     watch(() => props.content?.focusedHole, (hole) => {
       if (hole && libsReady.value && loadedModel) focusOnHole(hole)
     }, { deep: true })
+
+    watch(() => props.content?.focusedHoleColor, (color) => {
+      if (focusedHoleOverlay) focusedHoleOverlay.material.color.set(color || '#ffcc00')
+    })
 
     watch(() => props.content?.backgroundColor, (color) => {
       if (!scene || !renderer) return
@@ -1011,6 +1029,7 @@ export default {
       controls?.dispose()
       clearAllSelections()
       clearAnnotationOverlays()
+      clearFocusedHoleOverlay()
       if (loadedModel) disposeObject(loadedModel)
       if (renderer) { renderer.dispose(); renderer.forceContextLoss() }
     })
