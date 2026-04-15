@@ -963,7 +963,7 @@ export default {
         (hole.diameter || 10) * 3,
         (hole.depth    || 10) * 2,
         modelRadius    * 0.3
-      ) * 0.5
+      ) * 3.5
 
       snapAnim = {
         startPos:    camera.position.clone(),
