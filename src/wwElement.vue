@@ -174,6 +174,16 @@ export default {
       : null
     const setHolesVar = (val) => _wwHolesVar?.setValue?.(val)
 
+    const _wwPartPropsVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'partProperties',
+          type:         'object',
+          defaultValue: null,
+        })
+      : null
+    const setPartPropertiesVar = (val) => _wwPartPropsVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -437,6 +447,65 @@ export default {
       }
 
       return results
+    }
+
+    // ─── Part-level geometry analysis (surface area + volume) ────────────────
+    // Surface area: sum 0.5|e1×e2| per triangle.
+    // Volume: signed-tetrahedra method — v0·(e1×e2)/6 per triangle, then |total|.
+    // Requires a closed solid (STEP bodies qualify). Reuses vectors to avoid GC churn.
+    const analyzeModelGeometry = (box) => {
+      let surfaceArea = 0
+      let volume      = 0
+
+      const _v0 = new THREE.Vector3()
+      const _v1 = new THREE.Vector3()
+      const _v2 = new THREE.Vector3()
+      const _e1 = new THREE.Vector3()
+      const _e2 = new THREE.Vector3()
+      const _cr = new THREE.Vector3()
+
+      for (const mesh of clickableMeshes) {
+        mesh.updateWorldMatrix(true, false)
+        const wm  = mesh.matrixWorld
+        const geo = mesh.geometry
+        const pos = geo.attributes.position
+        const idx = geo.index
+        if (!pos) continue
+
+        const triCount = idx ? idx.count / 3 : pos.count / 3
+
+        for (let t = 0; t < triCount; t++) {
+          const i0 = idx ? idx.getX(t * 3)     : t * 3
+          const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1
+          const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2
+
+          _v0.set(pos.getX(i0), pos.getY(i0), pos.getZ(i0)).applyMatrix4(wm)
+          _v1.set(pos.getX(i1), pos.getY(i1), pos.getZ(i1)).applyMatrix4(wm)
+          _v2.set(pos.getX(i2), pos.getY(i2), pos.getZ(i2)).applyMatrix4(wm)
+
+          _e1.subVectors(_v1, _v0)
+          _e2.subVectors(_v2, _v0)
+          _cr.crossVectors(_e1, _e2)
+
+          surfaceArea += _cr.length() * 0.5
+          volume      += _v0.dot(_cr) / 6
+        }
+      }
+
+      const round = v => Math.round(v * 100) / 100
+      const size  = box.getSize(new THREE.Vector3())
+
+      return {
+        surfaceArea: round(surfaceArea),
+        volume:      round(Math.abs(volume)),
+        boundingBox: {
+          min:    { x: round(box.min.x), y: round(box.min.y), z: round(box.min.z) },
+          max:    { x: round(box.max.x), y: round(box.max.y), z: round(box.max.z) },
+          width:  round(size.x),
+          height: round(size.y),
+          depth:  round(size.z),
+        },
+      }
     }
 
     // Build a sub-geometry overlay mesh that covers only the group containing faceIndex.
@@ -762,16 +831,18 @@ export default {
           event: { cylinders, holeCount, bossCount },
         })
 
+        // Compute surface area, volume, and bounding box
+        const partProps = analyzeModelGeometry(box)
+        setPartPropertiesVar(partProps)
+
         emit('trigger-event', {
           name: 'model-loaded',
           event: {
             meshCount,
             vertexCount,
-            boundingBox: {
-              min:  { x: box.min.x, y: box.min.y, z: box.min.z },
-              max:  { x: box.max.x, y: box.max.y, z: box.max.z },
-              size: { x: size.x,   y: size.y,   z: size.z },
-            },
+            surfaceArea:  partProps.surfaceArea,
+            volume:       partProps.volume,
+            boundingBox:  partProps.boundingBox,
           },
         })
       } catch (err) {

@@ -225,7 +225,12 @@ export default {
       event: {
         meshCount:   0,
         vertexCount: 0,
-        boundingBox: {},
+        surfaceArea: 0,   // total surface area in model units²
+        volume:      0,   // total volume in model units³ (requires closed solid)
+        boundingBox: {
+          min: {}, max: {},
+          width: 0, height: 0, depth: 0,
+        },
       },
     },
   ],
