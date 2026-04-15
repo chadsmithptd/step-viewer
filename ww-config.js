@@ -19,6 +19,21 @@ export default {
       /* wwEditor:end */
     },
 
+    focusedHole: {
+      label: { en: 'Focused Hole' },
+      type: 'Object',
+      section: 'settings',
+      bindable: true,
+      defaultValue: null,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'object',
+        tooltip: 'Bind a hole object from the holes variable. Must include center {x,y,z} and axis {x,y,z}.',
+      },
+      propertyHelp: 'When changed, the camera animates to look into this hole. Bind to a variable updated on list-item click.',
+      /* wwEditor:end */
+    },
+
     // ── Annotations ──────────────────────────────────────────────────────────
     annotations: {
       label: { en: 'Annotations' },

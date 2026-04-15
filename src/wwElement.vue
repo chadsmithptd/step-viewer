@@ -916,8 +916,37 @@ export default {
     const rotateLeft  = () => rotateDeg(-45)
     const rotateRight = () => rotateDeg(45)
 
+    // Focus the camera on a specific hole, looking along its axis from the open end
+    const focusOnHole = (hole) => {
+      if (!camera || !controls || !hole?.center || !hole?.axis) return
+
+      const center  = new THREE.Vector3(hole.center.x, hole.center.y, hole.center.z)
+      const axisVec = new THREE.Vector3(hole.axis.x, hole.axis.y, hole.axis.z).normalize()
+
+      // Pick the axis direction that faces the camera's current side for a natural transition
+      if (axisVec.dot(camera.position.clone().sub(center)) < 0) axisVec.negate()
+
+      const viewDist = Math.max(
+        (hole.diameter || 10) * 3,
+        (hole.depth    || 10) * 2,
+        modelRadius    * 0.3
+      )
+
+      snapAnim = {
+        startPos:    camera.position.clone(),
+        endPos:      center.clone().addScaledVector(axisVec, viewDist),
+        startTarget: controls.target.clone(),
+        endTarget:   center.clone(),
+        progress:    0,
+      }
+    }
+
     // ─── Watchers ─────────────────────────────────────────────────────────────
     watch(() => props.content?.glbData, (val) => { if (val && libsReady.value) loadModel(val) })
+
+    watch(() => props.content?.focusedHole, (hole) => {
+      if (hole && libsReady.value && loadedModel) focusOnHole(hole)
+    }, { deep: true })
 
     watch(() => props.content?.backgroundColor, (color) => {
       if (!scene || !renderer) return
