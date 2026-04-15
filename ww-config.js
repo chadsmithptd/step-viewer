@@ -188,6 +188,8 @@ export default {
         diameter: null,   // number | null  (model units)
         depth:    null,   // number | null  (cylindrical faces only)
         axis:     null,   // {x,y,z} | null  (cylinder axis or face normal)
+        arcDeg:   null,   // number | null  — degrees of angular coverage (360 = full cylinder)
+        is360:    null,   // boolean | null — true only for full 360° cylindrical surfaces
       },
       default: true,
     },

@@ -337,11 +337,27 @@ export default {
               })
               const radius = radii.reduce((a, b) => a + b, 0) / radii.length
               const depth  = Math.max(...axialVals) - Math.min(...axialVals)
+
+              // Measure angular coverage: project normals onto axis-perpendicular plane,
+              // sort angles, find the largest gap — a full 360° surface has no large gaps.
+              const refVec = Math.abs(axisVec.x) < 0.9
+                ? new THREE.Vector3(1, 0, 0)
+                : new THREE.Vector3(0, 1, 0)
+              const perp1  = refVec.clone().cross(axisVec).normalize()
+              const perp2  = axisVec.clone().cross(perp1).normalize()
+              const angles = normals.map(n => Math.atan2(n.dot(perp2), n.dot(perp1))).sort((a, b) => a - b)
+              let maxGap   = (angles[0] + 2 * Math.PI) - angles[angles.length - 1]
+              for (let i = 1; i < angles.length; i++) maxGap = Math.max(maxGap, angles[i] - angles[i - 1])
+              const arcDeg = Math.round((2 * Math.PI - maxGap) * (180 / Math.PI))
+              const is360  = maxGap < (35 * Math.PI / 180)   // gap < 35° → full revolution
+
               return {
                 faceType:  'cylindrical',
                 diameter:  round(radius * 2),
                 depth:     round(depth),
                 axis:      { x: round(axisVec.x), y: round(axisVec.y), z: round(axisVec.z) },
+                arcDeg,
+                is360,
                 _centroid: centroid,
               }
             }
@@ -400,7 +416,9 @@ export default {
               const vi  = geo.index ? geo.index.array[group.start] : group.start
               const pos = new THREE.Vector3(posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)).applyMatrix4(wm)
               const nor = new THREE.Vector3(normAttr.getX(vi), normAttr.getY(vi), normAttr.getZ(vi)).applyMatrix3(nm).normalize()
-              isHole = result._centroid.clone().sub(pos).dot(nor) > 0
+              // Concave (normals point toward axis center) AND full 360° wrap = true hole
+              const isConcave = result._centroid.clone().sub(pos).dot(nor) > 0
+              isHole = isConcave && (result.is360 === true)
             }
           }
 
@@ -412,6 +430,7 @@ export default {
             depth:      result.depth,
             axis:       result.axis,
             center:     c ? { x: round(c.x), y: round(c.y), z: round(c.z) } : null,
+            arcDeg:     result.arcDeg ?? null,
             isHole,
           })
         }
