@@ -204,6 +204,16 @@ export default {
       : null
     const setFacesVar = (val) => _wwFacesVar?.setValue?.(val)
 
+    const _wwBoRVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'bodyOfRevolution',
+          type:         'object',
+          defaultValue: null,
+        })
+      : null
+    const setBodyOfRevolutionVar = (val) => _wwBoRVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -583,6 +593,292 @@ export default {
       }
     }
 
+    // ─── Body of Revolution test ──────────────────────────────────────────────
+    // Picks the best rotational-symmetry axis (from PCA + dominant cylinder axis
+    // candidates) and returns the voxel IoU between the original solid and a
+    // copy rotated 180° around that axis. A true body of revolution scores ~100%.
+
+    // Jacobi eigen-decomposition of a 3×3 symmetric matrix. Returns eigenvalues
+    // and matching eigenvectors (as Vector3). Used for PCA of vertex positions.
+    const jacobi3x3 = (A) => {
+      const M = [[A[0][0], A[0][1], A[0][2]], [A[1][0], A[1][1], A[1][2]], [A[2][0], A[2][1], A[2][2]]]
+      const V = [[1,0,0],[0,1,0],[0,0,1]]
+      for (let iter = 0; iter < 50; iter++) {
+        let p = 0, q = 1, maxOff = Math.abs(M[0][1])
+        if (Math.abs(M[0][2]) > maxOff) { p = 0; q = 2; maxOff = Math.abs(M[0][2]) }
+        if (Math.abs(M[1][2]) > maxOff) { p = 1; q = 2; maxOff = Math.abs(M[1][2]) }
+        if (maxOff < 1e-12) break
+
+        let t
+        if (M[p][p] === M[q][q]) {
+          t = 1
+        } else {
+          const theta = (M[q][q] - M[p][p]) / (2 * M[p][q])
+          t = (theta >= 0 ? 1 : -1) / (Math.abs(theta) + Math.sqrt(1 + theta * theta))
+        }
+        const c = 1 / Math.sqrt(1 + t * t)
+        const s = t * c
+        const mpq = M[p][q]
+        M[p][p] -= t * mpq
+        M[q][q] += t * mpq
+        M[p][q] = 0; M[q][p] = 0
+        for (let i = 0; i < 3; i++) {
+          if (i !== p && i !== q) {
+            const mip = M[i][p], miq = M[i][q]
+            M[i][p] = c * mip - s * miq; M[p][i] = M[i][p]
+            M[i][q] = s * mip + c * miq; M[q][i] = M[i][q]
+          }
+        }
+        for (let i = 0; i < 3; i++) {
+          const vip = V[i][p], viq = V[i][q]
+          V[i][p] = c * vip - s * viq
+          V[i][q] = s * vip + c * viq
+        }
+      }
+      return {
+        values: [M[0][0], M[1][1], M[2][2]],
+        vectors: [
+          new THREE.Vector3(V[0][0], V[1][0], V[2][0]),
+          new THREE.Vector3(V[0][1], V[1][1], V[2][1]),
+          new THREE.Vector3(V[0][2], V[1][2], V[2][2]),
+        ],
+      }
+    }
+
+    // Solid voxelization via z-column scanline. For each triangle, rasterizes
+    // its XY footprint and appends the plane-Z at each cell center to that
+    // column's event list. After all triangles, each column's z-events are
+    // sorted and odd-parity-filled to mark interior voxels as solid. Optional
+    // `rotMatrix` is applied to each vertex before voxelization.
+    const voxelizeSolid = (meshes, originVec, halfSize, gridRes, rotMatrix) => {
+      const nx = gridRes, ny = gridRes, nz = gridRes
+      const minX = originVec.x - halfSize
+      const minY = originVec.y - halfSize
+      const minZ = originVec.z - halfSize
+      const cell = (2 * halfSize) / gridRes
+      const invCell = 1 / cell
+
+      const columns = new Array(nx * ny)
+      for (let i = 0; i < nx * ny; i++) columns[i] = []
+
+      const v0 = new THREE.Vector3()
+      const v1 = new THREE.Vector3()
+      const v2 = new THREE.Vector3()
+
+      for (const mesh of meshes) {
+        mesh.updateWorldMatrix(true, false)
+        const wm = mesh.matrixWorld
+        const geo = mesh.geometry
+        const pos = geo?.attributes?.position
+        const idx = geo?.index
+        if (!pos) continue
+
+        const triCount = idx ? idx.count / 3 : pos.count / 3
+
+        for (let t = 0; t < triCount; t++) {
+          const i0 = idx ? idx.getX(t * 3)     : t * 3
+          const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1
+          const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2
+
+          v0.set(pos.getX(i0), pos.getY(i0), pos.getZ(i0)).applyMatrix4(wm)
+          v1.set(pos.getX(i1), pos.getY(i1), pos.getZ(i1)).applyMatrix4(wm)
+          v2.set(pos.getX(i2), pos.getY(i2), pos.getZ(i2)).applyMatrix4(wm)
+
+          if (rotMatrix) {
+            v0.applyMatrix4(rotMatrix)
+            v1.applyMatrix4(rotMatrix)
+            v2.applyMatrix4(rotMatrix)
+          }
+
+          const xMin = Math.min(v0.x, v1.x, v2.x)
+          const xMax = Math.max(v0.x, v1.x, v2.x)
+          const yMin = Math.min(v0.y, v1.y, v2.y)
+          const yMax = Math.max(v0.y, v1.y, v2.y)
+
+          const ix0 = Math.max(0,      Math.floor((xMin - minX) * invCell))
+          const ix1 = Math.min(nx - 1, Math.floor((xMax - minX) * invCell))
+          const iy0 = Math.max(0,      Math.floor((yMin - minY) * invCell))
+          const iy1 = Math.min(ny - 1, Math.floor((yMax - minY) * invCell))
+          if (ix1 < ix0 || iy1 < iy0) continue
+
+          const ax = v1.x - v0.x, ay = v1.y - v0.y
+          const bx = v2.x - v0.x, by = v2.y - v0.y
+          const denom = ax * by - bx * ay
+          if (Math.abs(denom) < 1e-14) continue // XY-degenerate (edge-on)
+          const invDen = 1 / denom
+          const z0 = v0.z, dz1 = v1.z - v0.z, dz2 = v2.z - v0.z
+
+          for (let iy = iy0; iy <= iy1; iy++) {
+            const py = minY + (iy + 0.5) * cell
+            const ryB = py - v0.y
+            for (let ix = ix0; ix <= ix1; ix++) {
+              const px = minX + (ix + 0.5) * cell
+              const rx = px - v0.x
+              const u = (rx * by - bx * ryB) * invDen
+              const w = (ax * ryB - rx * ay) * invDen
+              if (u < 0 || w < 0 || u + w > 1) continue
+              const z = z0 + u * dz1 + w * dz2
+              columns[iy * nx + ix].push(z)
+            }
+          }
+        }
+      }
+
+      const solid = new Uint8Array(nx * ny * nz)
+      const nxy = nx * ny
+      for (let iy = 0; iy < ny; iy++) {
+        for (let ix = 0; ix < nx; ix++) {
+          const zs = columns[iy * nx + ix]
+          const n = zs.length
+          if (n < 2) continue
+          zs.sort((a, b) => a - b)
+          // Drop a trailing unpaired event (tangent/edge touch) to stay even.
+          const pairs = n - (n % 2)
+          for (let k = 0; k < pairs; k += 2) {
+            const iz0 = Math.max(0,      Math.floor((zs[k]     - minZ) * invCell))
+            const iz1 = Math.min(nz - 1, Math.floor((zs[k + 1] - minZ) * invCell))
+            for (let iz = iz0; iz <= iz1; iz++) {
+              solid[iz * nxy + iy * nx + ix] = 1
+            }
+          }
+        }
+      }
+      return solid
+    }
+
+    // Main BoR analysis — runs on model load. Generates candidate axes from
+    // PCA of vertex positions + the dominant cylinder axis, voxelizes the
+    // original once in a cube centered on the vertex centroid, then for each
+    // candidate voxelizes a 180°-rotated copy and computes voxel IoU. Returns
+    // the best candidate + every tested candidate for downstream inspection.
+    const analyzeBodyOfRevolution = (cylinderFaces) => {
+      if (!clickableMeshes.length) return null
+      const GRID_RES = 48
+
+      // Pass 1: vertex centroid
+      const centroid = new THREE.Vector3()
+      let vertexCount = 0
+      const v = new THREE.Vector3()
+      for (const mesh of clickableMeshes) {
+        mesh.updateWorldMatrix(true, false)
+        const wm = mesh.matrixWorld
+        const pos = mesh.geometry?.attributes?.position
+        if (!pos) continue
+        for (let i = 0; i < pos.count; i++) {
+          v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(wm)
+          centroid.add(v)
+          vertexCount++
+        }
+      }
+      if (vertexCount === 0) return null
+      centroid.divideScalar(vertexCount)
+
+      // Pass 2: max radius from centroid + covariance matrix (for PCA)
+      let maxR2 = 0
+      let cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0
+      for (const mesh of clickableMeshes) {
+        mesh.updateWorldMatrix(true, false)
+        const wm = mesh.matrixWorld
+        const pos = mesh.geometry?.attributes?.position
+        if (!pos) continue
+        for (let i = 0; i < pos.count; i++) {
+          v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(wm)
+          const dx = v.x - centroid.x
+          const dy = v.y - centroid.y
+          const dz = v.z - centroid.z
+          const r2 = dx * dx + dy * dy + dz * dz
+          if (r2 > maxR2) maxR2 = r2
+          cxx += dx * dx; cxy += dx * dy; cxz += dx * dz
+          cyy += dy * dy; cyz += dy * dz
+          czz += dz * dz
+        }
+      }
+      cxx /= vertexCount; cxy /= vertexCount; cxz /= vertexCount
+      cyy /= vertexCount; cyz /= vertexCount; czz /= vertexCount
+
+      const halfSize = Math.sqrt(maxR2) * 1.02 || 1
+      if (halfSize < 1e-9) return null
+
+      // PCA eigen — sort axes by eigenvalue descending ("longest axis" first)
+      const eig = jacobi3x3([[cxx, cxy, cxz], [cxy, cyy, cyz], [cxz, cyz, czz]])
+      const order = [0, 1, 2].sort((a, b) => eig.values[b] - eig.values[a])
+      const pcaAxes = order.map(i => eig.vectors[i].clone().normalize())
+      const pcaValues = order.map(i => eig.values[i])
+
+      const candidates = [
+        { source: 'pca-longest',  axis: pcaAxes[0] },
+        { source: 'pca-mid',      axis: pcaAxes[1] },
+        { source: 'pca-shortest', axis: pcaAxes[2] },
+      ]
+
+      // Dominant cylinder axis — cluster cylinder directions (ignores sign)
+      if (Array.isArray(cylinderFaces) && cylinderFaces.length) {
+        const clusters = []
+        for (const cyl of cylinderFaces) {
+          if (!cyl?.axis) continue
+          const a = new THREE.Vector3(cyl.axis.x, cyl.axis.y, cyl.axis.z)
+          if (a.lengthSq() < 1e-8) continue
+          a.normalize()
+          const existing = clusters.find(c => Math.abs(c.axis.dot(a)) > 0.98)
+          if (existing) existing.count++
+          else clusters.push({ axis: a, count: 1 })
+        }
+        if (clusters.length) {
+          clusters.sort((a, b) => b.count - a.count)
+          candidates.push({ source: 'cylinder-dominant', axis: clusters[0].axis })
+        }
+      }
+
+      // Dedupe near-parallel candidates
+      const unique = []
+      for (const c of candidates) {
+        if (unique.some(u => Math.abs(u.axis.dot(c.axis)) > 0.98)) continue
+        unique.push(c)
+      }
+
+      // Voxelize original once — shared across all candidate comparisons
+      const original = voxelizeSolid(clickableMeshes, centroid, halfSize, GRID_RES, null)
+      let originalCount = 0
+      for (let i = 0; i < original.length; i++) originalCount += original[i]
+      if (!originalCount) return null
+
+      const results = []
+      for (const c of unique) {
+        const tNeg = new THREE.Matrix4().makeTranslation(-centroid.x, -centroid.y, -centroid.z)
+        const rot  = new THREE.Matrix4().makeRotationAxis(c.axis, Math.PI)
+        const tPos = new THREE.Matrix4().makeTranslation(centroid.x, centroid.y, centroid.z)
+        const xform = new THREE.Matrix4().multiplyMatrices(tPos, rot).multiply(tNeg)
+
+        const rotated = voxelizeSolid(clickableMeshes, centroid, halfSize, GRID_RES, xform)
+        let inter = 0, uni = 0
+        for (let i = 0; i < original.length; i++) {
+          const a = original[i], b = rotated[i]
+          if (a | b) uni++
+          if (a & b) inter++
+        }
+        const iou = uni > 0 ? inter / uni : 0
+        results.push({ source: c.source, axis: c.axis, overlapPercent: Math.round(iou * 10000) / 100 })
+      }
+
+      results.sort((a, b) => b.overlapPercent - a.overlapPercent)
+      const best  = results[0]
+      const round = v => Math.round(v * 1000) / 1000
+
+      return {
+        axis:           { x: round(best.axis.x), y: round(best.axis.y), z: round(best.axis.z) },
+        axisOrigin:     { x: round(centroid.x),  y: round(centroid.y),  z: round(centroid.z)  },
+        overlapPercent: best.overlapPercent,
+        axisSource:     best.source,
+        isBodyOfRevolution: best.overlapPercent >= 90,
+        pcaEigenvalues: pcaValues.map(round),
+        candidatesTested: results.map(r => ({
+          source:         r.source,
+          axis:           { x: round(r.axis.x), y: round(r.axis.y), z: round(r.axis.z) },
+          overlapPercent: r.overlapPercent,
+        })),
+      }
+    }
+
     // Build a sub-geometry overlay mesh that covers only the group containing faceIndex.
     // offsetFactor: -1 for annotations (below), -2 for selections (above annotations).
     const makeOverlayMesh = (mesh, faceIndex, color, offsetFactor = -2) => {
@@ -919,6 +1215,10 @@ export default {
         // Compute surface area, volume, and bounding box
         const partProps = analyzeModelGeometry(box)
         setPartPropertiesVar(partProps)
+
+        // Body of Revolution test — voxel IoU against a 180°-rotated copy
+        const bor = analyzeBodyOfRevolution(cylinders)
+        setBodyOfRevolutionVar(bor)
 
         emit('trigger-event', {
           name: 'model-loaded',
