@@ -948,34 +948,26 @@ export default {
       const center  = new THREE.Vector3(hole.center.x, hole.center.y, hole.center.z)
       const axisVec = new THREE.Vector3(hole.axis.x, hole.axis.y, hole.axis.z).normalize()
 
-      // Pick the axis direction that faces the camera's current side for a natural transition
-      if (axisVec.dot(camera.position.clone().sub(center)) < 0) axisVec.negate()
+      // Orient the axis to point away from the model's geometric center so the
+      // camera always lands on the exterior (opening) side of the hole.
+      const modelCenter = defaultTarget || new THREE.Vector3()
+      const outward     = center.clone().sub(modelCenter)
+      if (outward.lengthSq() > 0.0001) {
+        if (axisVec.dot(outward) < 0) axisVec.negate()
+      } else {
+        // Fallback for holes exactly at the model center
+        if (axisVec.dot(camera.position.clone().sub(center)) < 0) axisVec.negate()
+      }
 
-      // Pull back 80% beyond the ideal viewing distance
       const viewDist = Math.max(
         (hole.diameter || 10) * 3,
         (hole.depth    || 10) * 2,
         modelRadius    * 0.3
-      ) * 1.8
-
-      const endPos = center.clone().addScaledVector(axisVec, viewDist)
-
-      // Set camera.up so OrbitControls doesn't flip the part.
-      // View direction points from endPos toward center (= -axisVec).
-      // Prefer world Z as up (common STEP/CAD convention); fall back to world Y
-      // when the view is nearly parallel to Z to avoid a degenerate up vector.
-      const viewDir = axisVec.clone().negate()
-      const worldZ  = new THREE.Vector3(0, 0, 1)
-      const worldY  = new THREE.Vector3(0, 1, 0)
-      const ref     = Math.abs(viewDir.dot(worldZ)) < 0.9 ? worldZ : worldY
-      const upVec   = ref.clone()
-        .sub(viewDir.clone().multiplyScalar(ref.dot(viewDir)))
-        .normalize()
-      camera.up.copy(upVec)
+      ) * 0.5
 
       snapAnim = {
         startPos:    camera.position.clone(),
-        endPos,
+        endPos:      center.clone().addScaledVector(axisVec, viewDist),
         startTarget: controls.target.clone(),
         endTarget:   center.clone(),
         progress:    0,
