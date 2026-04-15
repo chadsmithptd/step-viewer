@@ -180,6 +180,15 @@ export default {
       },
     },
     {
+      name: 'holes-detected',
+      label: { en: 'On Holes Detected' },
+      event: {
+        cylinders:  [],  // all cylindrical faces — each has meshName, objectName, diameter, depth, axis, center, isHole
+        holeCount:  0,   // concave cylinders (bores, holes)
+        bossCount:  0,   // convex cylinders (pins, bosses)
+      },
+    },
+    {
       name: 'model-loaded',
       label: { en: 'On Model Loaded' },
       event: {

@@ -164,6 +164,16 @@ export default {
       : null
     const setMultiSelectionVar = (val) => _wwVar?.setValue?.(val)
 
+    const _wwHolesVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'holes',
+          type:         'array',
+          defaultValue: [],
+        })
+      : null
+    const setHolesVar = (val) => _wwHolesVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -327,10 +337,11 @@ export default {
               const radius = radii.reduce((a, b) => a + b, 0) / radii.length
               const depth  = Math.max(...axialVals) - Math.min(...axialVals)
               return {
-                faceType: 'cylindrical',
-                diameter: round(radius * 2),
-                depth:    round(depth),
-                axis:     { x: round(axisVec.x), y: round(axisVec.y), z: round(axisVec.z) },
+                faceType:  'cylindrical',
+                diameter:  round(radius * 2),
+                depth:     round(depth),
+                axis:      { x: round(axisVec.x), y: round(axisVec.y), z: round(axisVec.z) },
+                _centroid: centroid,
               }
             }
           }
@@ -354,6 +365,58 @@ export default {
       }
 
       return { faceType: 'unknown', diameter: null, depth: null, axis: null }
+    }
+
+    // ─── Full-model cylinder scan (runs once on load) ─────────────────────────
+    // Returns every cylindrical face with isHole flag (concave = hole, convex = boss).
+    const analyzeAllFaces = () => {
+      const round   = v => Math.round(v * 1000) / 1000
+      const results = []
+
+      for (const mesh of clickableMeshes) {
+        const geo = mesh.geometry
+        if (!geo?.attributes?.position) continue
+
+        // No groups → treat entire mesh as one face
+        const groups = geo.groups?.length > 0
+          ? geo.groups
+          : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes.position.count }]
+
+        for (const group of groups) {
+          const faceIndex = Math.floor(group.start / 3)
+          const result    = analyzeFaceGeometry(mesh, faceIndex)
+          if (result.faceType !== 'cylindrical') continue
+
+          // Hole vs boss: dot(centroid − vertex, normal) > 0 → concave (hole)
+          let isHole = null
+          if (result._centroid) {
+            const posAttr  = geo.attributes.position
+            const normAttr = geo.attributes.normal
+            if (posAttr && normAttr) {
+              mesh.updateWorldMatrix(true, false)
+              const wm = mesh.matrixWorld
+              const nm = new THREE.Matrix3().getNormalMatrix(wm)
+              const vi  = geo.index ? geo.index.array[group.start] : group.start
+              const pos = new THREE.Vector3(posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)).applyMatrix4(wm)
+              const nor = new THREE.Vector3(normAttr.getX(vi), normAttr.getY(vi), normAttr.getZ(vi)).applyMatrix3(nm).normalize()
+              isHole = result._centroid.clone().sub(pos).dot(nor) > 0
+            }
+          }
+
+          const c = result._centroid
+          results.push({
+            meshName:   mesh.name || '',
+            objectName: mesh.parent?.name || mesh.name || '',
+            diameter:   result.diameter,
+            depth:      result.depth,
+            axis:       result.axis,
+            center:     c ? { x: round(c.x), y: round(c.y), z: round(c.z) } : null,
+            isHole,
+          })
+        }
+      }
+
+      return results
     }
 
     // Build a sub-geometry overlay mesh that covers only the group containing faceIndex.
@@ -663,6 +726,16 @@ export default {
 
         // Build annotation overlays now that clickableMeshes is populated
         buildAnnotationOverlays()
+
+        // Scan all faces for cylindrical geometry and emit holes manifest
+        const cylinders = analyzeAllFaces()
+        const holeCount = cylinders.filter(c => c.isHole === true).length
+        const bossCount = cylinders.filter(c => c.isHole === false).length
+        setHolesVar(cylinders)
+        emit('trigger-event', {
+          name:  'holes-detected',
+          event: { cylinders, holeCount, bossCount },
+        })
 
         emit('trigger-event', {
           name: 'model-loaded',
