@@ -218,6 +218,7 @@ export default {
     let keyLight       = null
     let facesData      = []   // unified face list for click enrichment
     let holeMeshNames  = new Set()  // mesh names belonging to full holes (arcDeg ≥ 350)
+    let edgeLines      = []   // LineSegments overlaying hard geometric edges
 
     let clickableMeshes    = []
     // Multi-selection: [{mesh, groupIndex, overlay, faceIndex, point, normal, meshName, objectName, userData}]
@@ -1038,7 +1039,7 @@ export default {
       mesh.updateWorldMatrix(true, false)
       overlay.matrixAutoUpdate = false
       overlay.matrix.copy(mesh.matrixWorld)
-      overlay.renderOrder = 1
+      overlay.renderOrder = 2
       scene.add(overlay)
       return overlay
     }
@@ -1201,6 +1202,35 @@ export default {
       focusedHoleOverlays = []
     }
 
+    // ─── Edge lines ───────────────────────────────────────────────────────────
+    const removeEdges = () => {
+      edgeLines.forEach(l => {
+        scene?.remove(l)
+        l.geometry.dispose()
+        l.material.dispose()
+      })
+      edgeLines = []
+    }
+
+    const buildEdges = () => {
+      removeEdges()
+      if (!loadedModel || !props.content?.showEdges) return
+      const color = new THREE.Color(props.content?.edgeColor || '#222222')
+      for (const mesh of clickableMeshes) {
+        mesh.updateWorldMatrix(true, false)
+        const edgesGeo = new THREE.EdgesGeometry(mesh.geometry, 15)
+        const lines    = new THREE.LineSegments(
+          edgesGeo,
+          new THREE.LineBasicMaterial({ color })
+        )
+        lines.matrixAutoUpdate = false
+        lines.matrix.copy(mesh.matrixWorld)
+        lines.renderOrder = 1
+        scene.add(lines)
+        edgeLines.push(lines)
+      }
+    }
+
     // ─── Annotation overlays ──────────────────────────────────────────────────
     const clearAnnotationOverlays = () => {
       annotationOverlays.forEach(a => removeOverlay(a.overlay))
@@ -1355,6 +1385,7 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
+      removeEdges()
       facesData = []
       holeMeshNames = new Set()
 
@@ -1450,8 +1481,9 @@ export default {
 
         modelLoaded.value = true
 
-        // Build annotation overlays now that clickableMeshes is populated
+        // Build annotation overlays and edge lines now that clickableMeshes is populated
         buildAnnotationOverlays()
+        buildEdges()
 
         // Build unified face list — all surface types; cylindrical faces carry isHole flag.
         // Merge split half-cylinders before combining with non-cylindrical faces.
@@ -1773,6 +1805,14 @@ export default {
       annotationOverlays.forEach(a => a.overlay?.material?.color?.set(color || '#ff6b35'))
     })
 
+    watch(() => props.content?.showEdges, () => {
+      if (libsReady.value && loadedModel) buildEdges()
+    })
+
+    watch(() => props.content?.edgeColor, (color) => {
+      edgeLines.forEach(l => l.material.color.set(color || '#222222'))
+    })
+
     watch(() => props.content?.showGrid, (show) => {
       if (!scene) return
       if (show && !gridHelper) {
@@ -1821,6 +1861,7 @@ export default {
       clearFocusedHoleOverlay()
       facesData = []
       holeMeshNames = new Set()
+      removeEdges()
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
       if (loadedModel) disposeObject(loadedModel)

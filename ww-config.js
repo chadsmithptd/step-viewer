@@ -202,6 +202,35 @@ export default {
       /* wwEditor:end */
     },
 
+    showEdges: {
+      label: { en: 'Show Edges' },
+      type: 'OnOff',
+      section: 'style',
+      bindable: true,
+      defaultValue: false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Overlay hard geometric edges on the model surface.',
+      },
+      /* wwEditor:end */
+    },
+
+    edgeColor: {
+      label: { en: 'Edge Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#222222',
+      hidden: content => !content?.showEdges,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Color of the edge lines drawn over the model.',
+      },
+      /* wwEditor:end */
+    },
+
     selectionColor: {
       label: { en: 'Selection Highlight Color' },
       type: 'Color',
