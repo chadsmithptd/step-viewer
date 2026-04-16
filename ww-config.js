@@ -202,6 +202,50 @@ export default {
       /* wwEditor:end */
     },
 
+    thinWallThreshold: {
+      label: { en: 'Thin Wall Threshold' },
+      type: 'Number',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 2,
+      options: { min: 0, step: 0.1 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Wall thickness below this value (in model units, typically mm) is flagged as a thin wall.',
+      },
+      /* wwEditor:end */
+    },
+
+    showThinWalls: {
+      label: { en: 'Highlight Thin Walls' },
+      type: 'OnOff',
+      section: 'style',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Overlay a color highlight on faces identified as thin walls.',
+      },
+      /* wwEditor:end */
+    },
+
+    thinWallColor: {
+      label: { en: 'Thin Wall Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#ff4444',
+      hidden: content => !content?.showThinWalls,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Highlight color applied to faces identified as thin walls.',
+      },
+      /* wwEditor:end */
+    },
+
     showEdges: {
       label: { en: 'Show Edges' },
       type: 'OnOff',
@@ -328,6 +372,14 @@ export default {
         cylinders:  [],  // all cylindrical faces — each has meshName, objectName, diameter, depth, axis, center, isHole
         holeCount:  0,   // concave cylinders (bores, holes)
         bossCount:  0,   // convex cylinders (pins, bosses)
+      },
+    },
+    {
+      name: 'thin-walls-detected',
+      label: { en: 'On Thin Walls Detected' },
+      event: {
+        thinWalls: [],  // each item: { meshName, objectName, materialIndex, faceIndex, thickness, center }
+        count: 0,
       },
     },
     {
