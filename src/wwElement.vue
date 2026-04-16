@@ -217,6 +217,7 @@ export default {
     let ambientLight   = null
     let keyLight       = null
     let facesData      = []   // unified face list for click enrichment
+    let holeMeshNames  = new Set()  // mesh names belonging to full holes (arcDeg ≥ 350)
 
     let clickableMeshes    = []
     // Multi-selection: [{mesh, groupIndex, overlay, faceIndex, point, normal, meshName, objectName, userData}]
@@ -1143,12 +1144,19 @@ export default {
       const needsTransparency = op < 1
       loadedModel.traverse(obj => {
         if (!obj.isMesh) return
-        const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
+        const isHole = holeMeshNames.has(obj.name)
+        const mats   = Array.isArray(obj.material) ? obj.material : [obj.material]
         mats.forEach(m => {
           if (!m) return
-          m.transparent = needsTransparency
-          m.opacity     = op
-          m.depthWrite  = !needsTransparency
+          if (isHole) {
+            m.transparent = false
+            m.opacity     = 1
+            m.depthWrite  = true
+          } else {
+            m.transparent = needsTransparency
+            m.opacity     = op
+            m.depthWrite  = !needsTransparency
+          }
           m.needsUpdate = true
         })
       })
@@ -1162,13 +1170,14 @@ export default {
       const needsTransparency = typeof op === 'number' && op < 1
       loadedModel.traverse(obj => {
         if (!obj.isMesh) return
+        const isHole = holeMeshNames.has(obj.name)
         const mat = new THREE.MeshStandardMaterial({
           color:       new THREE.Color(color || '#cccccc'),
           roughness:   0.35,
           metalness:   0.1,
-          transparent: needsTransparency,
-          opacity:     needsTransparency ? op : 1,
-          depthWrite:  !needsTransparency,
+          transparent: isHole ? false : needsTransparency,
+          opacity:     isHole ? 1 : (needsTransparency ? op : 1),
+          depthWrite:  isHole ? true : !needsTransparency,
         })
         obj.material = mat
         overrideMaterials.push(mat)
@@ -1347,6 +1356,7 @@ export default {
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
       facesData = []
+      holeMeshNames = new Set()
 
       try {
         const loader = new GLTFLoader()
@@ -1451,6 +1461,13 @@ export default {
         const mergedCylinders  = mergeCylinders(cylindricalFaces)
         const allFaces         = [...otherFaces, ...mergedCylinders]
         facesData = allFaces
+        holeMeshNames = new Set()
+        for (const face of facesData) {
+          if ((face.arcDeg ?? 0) >= 350) {
+            if (Array.isArray(face.meshNames)) face.meshNames.forEach(n => holeMeshNames.add(n))
+            else if (face.meshName) holeMeshNames.add(face.meshName)
+          }
+        }
         setFacesVar(allFaces)
 
         const holeCount = mergedCylinders.filter(c => c.isHole === true).length
@@ -1803,6 +1820,7 @@ export default {
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
       facesData = []
+      holeMeshNames = new Set()
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
       if (loadedModel) disposeObject(loadedModel)
