@@ -1245,136 +1245,198 @@ export default {
     }
 
     // ─── Sharp corner detection ───────────────────────────────────────────────
-    // Finds edges where adjacent face groups meet at an angle outside [90°±tol].
+    // STEP/OCCT GLB exports tessellate each B-Rep face independently — boundary
+    // vertices are NOT shared between adjacent faces. Vertex-index adjacency never
+    // finds cross-face edges, so we use a spatial proximity approach instead:
+    //
+    //  1. Per face group: extract boundary vertices (edges with a single adjacent
+    //     triangle within the group) and compute an average outward face normal.
+    //  2. Spatial-hash all boundary vertex world positions.
+    //  3. For every boundary vertex that has a counterpart from a different face
+    //     group within epsilon, those two groups are adjacent.
+    //  4. Compute the interior dihedral angle from the two face normals.
+    //  5. Flag pairs outside [90° ± tolerance].
+    //
     // Returns { data: deduplicatedCorners[], rawEdges: allFlaggedEdges[] }
-    // data entries:  { meshName, objectName, angle, type, g1, g2, v1, v2 }
-    // rawEdges:       { type, v1, v2 }   — used for LineSegments rendering
     const detectSharpCorners = (tolerance) => {
       if (!clickableMeshes.length) return { data: [], rawEdges: [] }
 
       const tol          = Math.abs(typeof tolerance === 'number' ? tolerance : 10)
       const acuteThresh  = 90 - tol
       const obtuseThresh = 90 + tol
-      const round = v => Math.round(v * 100) / 100
+      const round        = v => Math.round(v * 100) / 100
+      const EPSILON      = Math.max(modelRadius * 0.002, 0.01)
+      const CELL         = EPSILON * 2
 
-      const rawEdges = []
-      const pairMap  = new Map()  // key → most-extreme entry per face-pair
+      // ── Step 1: collect face groups with boundary vertices + average normal ──
+      const faceGroups = []   // { id, meshName, objectName, matIdx, normal, bvPos[] }
 
-      const _p0 = new THREE.Vector3()
-      const _p1 = new THREE.Vector3()
-      const _p2 = new THREE.Vector3()
-      const _e1 = new THREE.Vector3()
-      const _e2 = new THREE.Vector3()
+      const _p = new THREE.Vector3()
 
-      for (const mesh of clickableMeshes) {
-        const geo = mesh.geometry
+      for (let mi = 0; mi < clickableMeshes.length; mi++) {
+        const mesh     = clickableMeshes[mi]
+        const geo      = mesh.geometry
         if (!geo?.attributes?.position) continue
 
         const posAttr  = geo.attributes.position
         const idxArr   = geo.index?.array
         const triCount = idxArr ? idxArr.length / 3 : Math.floor(posAttr.count / 3)
-        if (triCount < 2) continue
+        if (triCount < 1) continue
 
         mesh.updateWorldMatrix(true, false)
         const wm = mesh.matrixWorld
 
-        // Map each triangle to its face group (materialIndex)
-        const triToGroup = new Int32Array(triCount)
-        const singleGroup = !geo.groups || geo.groups.length <= 1
-        if (!singleGroup) {
-          for (const g of geo.groups) {
-            const t0 = Math.floor(g.start / 3)
-            const t1 = Math.floor((g.start + g.count) / 3)
-            for (let t = t0; t < t1; t++) triToGroup[t] = g.materialIndex ?? 0
-          }
-        }
+        const groups = geo.groups?.length > 0
+          ? geo.groups
+          : [{ start: 0, count: idxArr ? idxArr.length : posAttr.count, materialIndex: 0 }]
 
-        // Compute flat world-space normal per triangle (stored as Float32Array)
-        const triNormals = new Float32Array(triCount * 3)
-        for (let t = 0; t < triCount; t++) {
-          const i0 = idxArr ? idxArr[t * 3]     : t * 3
-          const i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1
-          const i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2
-          _p0.set(posAttr.getX(i0), posAttr.getY(i0), posAttr.getZ(i0)).applyMatrix4(wm)
-          _p1.set(posAttr.getX(i1), posAttr.getY(i1), posAttr.getZ(i1)).applyMatrix4(wm)
-          _p2.set(posAttr.getX(i2), posAttr.getY(i2), posAttr.getZ(i2)).applyMatrix4(wm)
-          _e1.subVectors(_p1, _p0)
-          _e2.subVectors(_p2, _p0)
-          const nx = _e1.y * _e2.z - _e1.z * _e2.y
-          const ny = _e1.z * _e2.x - _e1.x * _e2.z
-          const nz = _e1.x * _e2.y - _e1.y * _e2.x
-          const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1
-          triNormals[t * 3]     = nx / len
-          triNormals[t * 3 + 1] = ny / len
-          triNormals[t * 3 + 2] = nz / len
-        }
+        for (let gi = 0; gi < groups.length; gi++) {
+          const group    = groups[gi]
+          const tStart   = Math.floor(group.start / 3)
+          const tEnd     = Math.floor((group.start + group.count) / 3)
 
-        // Build edge → [triA, triB] adjacency map
-        const edgeMap = new Map()
-        for (let t = 0; t < triCount; t++) {
-          const i0 = idxArr ? idxArr[t * 3]     : t * 3
-          const i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1
-          const i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2
-          for (const [a, b] of [[i0, i1], [i1, i2], [i2, i0]]) {
-            const key = a < b ? `${a}_${b}` : `${b}_${a}`
-            const entry = edgeMap.get(key)
-            if (!entry) edgeMap.set(key, [t])
-            else if (entry.length === 1) entry.push(t)
-            // 3+ tris sharing an edge = non-manifold, skip
-          }
-        }
-
-        // Process each shared edge
-        for (const [key, tris] of edgeMap) {
-          if (tris.length !== 2) continue
-          const [t1, t2] = tris
-          const g1 = triToGroup[t1]
-          const g2 = triToGroup[t2]
-
-          // For grouped meshes: only check cross-group edges (real feature boundaries)
-          // For single-group meshes: skip near-flat tessellation edges
-          if (!singleGroup) {
-            if (g1 === g2) continue
+          // Count edge valence within this group (boundary edge → count 1)
+          const edgeCount = new Map()
+          for (let t = tStart; t < tEnd; t++) {
+            const i0 = idxArr ? idxArr[t * 3]     : t * 3
+            const i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1
+            const i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2
+            for (const [a, b] of [[i0, i1], [i1, i2], [i2, i0]]) {
+              const k = a < b ? `${a}_${b}` : `${b}_${a}`
+              edgeCount.set(k, (edgeCount.get(k) || 0) + 1)
+            }
           }
 
-          const nx1 = triNormals[t1 * 3], ny1 = triNormals[t1 * 3 + 1], nz1 = triNormals[t1 * 3 + 2]
-          const nx2 = triNormals[t2 * 3], ny2 = triNormals[t2 * 3 + 1], nz2 = triNormals[t2 * 3 + 2]
-          const dot        = Math.max(-1, Math.min(1, nx1 * nx2 + ny1 * ny2 + nz1 * nz2))
-          const normalAngle  = Math.acos(dot) * 180 / Math.PI
+          // Boundary vertex indices
+          const bvSet = new Set()
+          for (const [k, cnt] of edgeCount) {
+            if (cnt === 1) {
+              const [a, b] = k.split('_').map(Number)
+              bvSet.add(a); bvSet.add(b)
+            }
+          }
 
-          // For single-group meshes, skip near-flat tessellation edges (< 15° crease)
-          if (singleGroup && normalAngle < 15) continue
+          // Average outward face normal from triangle cross products
+          let nx = 0, ny = 0, nz = 0, nCnt = 0
+          for (let t = tStart; t < tEnd; t++) {
+            const i0 = idxArr ? idxArr[t * 3]     : t * 3
+            const i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1
+            const i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2
+            _p.set(posAttr.getX(i0), posAttr.getY(i0), posAttr.getZ(i0)).applyMatrix4(wm)
+            const ax = _p.x, ay = _p.y, az = _p.z
+            _p.set(posAttr.getX(i1), posAttr.getY(i1), posAttr.getZ(i1)).applyMatrix4(wm)
+            const bx = _p.x - ax, by = _p.y - ay, bz = _p.z - az
+            _p.set(posAttr.getX(i2), posAttr.getY(i2), posAttr.getZ(i2)).applyMatrix4(wm)
+            const cx = _p.x - ax, cy = _p.y - ay, cz = _p.z - az
+            const ex = by * cz - bz * cy, ey = bz * cx - bx * cz, ez = bx * cy - by * cx
+            const el = Math.sqrt(ex * ex + ey * ey + ez * ez)
+            if (el > 0) { nx += ex / el; ny += ey / el; nz += ez / el; nCnt++ }
+          }
+          if (nCnt === 0 || bvSet.size === 0) continue
+          const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1
 
-          // interior_dihedral = 180° - angle_between_outward_normals
-          const interiorAngle = 180 - normalAngle
+          // World-space boundary vertex positions (sample up to 300 per group)
+          const allBV = [...bvSet]
+          const step  = Math.max(1, Math.floor(allBV.length / 300))
+          const bvPos = []
+          for (let i = 0; i < allBV.length; i += step) {
+            const vi = allBV[i]
+            _p.set(posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)).applyMatrix4(wm)
+            bvPos.push({ x: _p.x, y: _p.y, z: _p.z })
+          }
 
-          if (interiorAngle >= acuteThresh && interiorAngle <= obtuseThresh) continue
+          faceGroups.push({
+            id:         faceGroups.length,
+            meshName:   mesh.name || '',
+            objectName: mesh.parent?.name || mesh.name || '',
+            matIdx:     group.materialIndex ?? 0,
+            normal:     { x: nx / nl, y: ny / nl, z: nz / nl },
+            bvPos,
+          })
+        }
+      }
 
-          // Retrieve edge vertex world positions
-          const [vi1, vi2] = key.split('_').map(Number)
-          _p0.set(posAttr.getX(vi1), posAttr.getY(vi1), posAttr.getZ(vi1)).applyMatrix4(wm)
-          _p1.set(posAttr.getX(vi2), posAttr.getY(vi2), posAttr.getZ(vi2)).applyMatrix4(wm)
-          const v1 = { x: round(_p0.x), y: round(_p0.y), z: round(_p0.z) }
-          const v2 = { x: round(_p1.x), y: round(_p1.y), z: round(_p1.z) }
-          const type = interiorAngle < acuteThresh ? 'acute' : 'obtuse'
+      // ── Step 2: spatial hash of all boundary vertices ─────────────────────
+      const spatialHash = new Map()
+      const hk = (x, y, z) =>
+        `${Math.floor(x / CELL)}_${Math.floor(y / CELL)}_${Math.floor(z / CELL)}`
 
-          rawEdges.push({ type, v1, v2 })
+      for (const fg of faceGroups) {
+        for (const pos of fg.bvPos) {
+          const key = hk(pos.x, pos.y, pos.z)
+          if (!spatialHash.has(key)) spatialHash.set(key, [])
+          spatialHash.get(key).push({ fgId: fg.id, pos })
+        }
+      }
 
-          // Deduplicate by face-pair: keep the entry with the most extreme angle
-          const pairKey = `${mesh.name}_${Math.min(g1, g2)}_${Math.max(g1, g2)}`
-          const existing = pairMap.get(pairKey)
-          const deviation = Math.abs(interiorAngle - 90)
-          if (!existing || deviation > Math.abs(existing.angle - 90)) {
-            pairMap.set(pairKey, {
-              meshName:   mesh.name   || '',
-              objectName: mesh.parent?.name || mesh.name || '',
-              angle:      round(interiorAngle),
-              type,
-              g1,
-              g2,
-              v1,
-              v2,
-            })
+      // ── Step 3 & 4: find adjacent pairs + compute dihedral angle ──────────
+      const rawEdges = []
+      const pairMap  = new Map()   // faceGroupPairKey → data entry
+
+      const checked = new Set()
+
+      for (const fg1 of faceGroups) {
+        for (const pos1 of fg1.bvPos) {
+          const ix = Math.floor(pos1.x / CELL)
+          const iy = Math.floor(pos1.y / CELL)
+          const iz = Math.floor(pos1.z / CELL)
+
+          // Check 3×3×3 neighborhood
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dz = -1; dz <= 1; dz++) {
+                const neighbors = spatialHash.get(`${ix+dx}_${iy+dy}_${iz+dz}`)
+                if (!neighbors) continue
+
+                for (const { fgId, pos: pos2 } of neighbors) {
+                  if (fgId === fg1.id) continue
+                  const fg2 = faceGroups[fgId]
+
+                  // Same mesh + same group → skip
+                  if (fg2.meshName === fg1.meshName && fg2.matIdx === fg1.matIdx) continue
+
+                  // Check actual Euclidean distance within epsilon
+                  const ex = pos1.x - pos2.x, ey = pos1.y - pos2.y, ez = pos1.z - pos2.z
+                  if (ex * ex + ey * ey + ez * ez > EPSILON * EPSILON) continue
+
+                  // Canonical pair key (order-independent)
+                  const pairId = fg1.id < fgId ? `${fg1.id}_${fgId}` : `${fgId}_${fg1.id}`
+                  if (checked.has(pairId)) continue
+                  checked.add(pairId)
+
+                  // Dihedral angle between the two face normals
+                  const n1 = fg1.normal, n2 = fg2.normal
+                  const dot = Math.max(-1, Math.min(1,
+                    n1.x * n2.x + n1.y * n2.y + n1.z * n2.z))
+                  const normalAngle   = Math.acos(dot) * 180 / Math.PI
+                  const interiorAngle = 180 - normalAngle
+
+                  // Skip if within the acceptable band around 90°
+                  if (interiorAngle >= acuteThresh && interiorAngle <= obtuseThresh) continue
+
+                  const type = interiorAngle < acuteThresh ? 'acute' : 'obtuse'
+                  const v1   = { x: round(pos1.x), y: round(pos1.y), z: round(pos1.z) }
+                  const v2   = { x: round(pos2.x), y: round(pos2.y), z: round(pos2.z) }
+                  rawEdges.push({ type, v1, v2 })
+
+                  // Deduplicate: keep most-extreme angle per face-pair
+                  const existing  = pairMap.get(pairId)
+                  const deviation = Math.abs(interiorAngle - 90)
+                  if (!existing || deviation > Math.abs(existing.angle - 90)) {
+                    pairMap.set(pairId, {
+                      meshName:   fg1.meshName,
+                      objectName: fg1.objectName,
+                      angle:      round(interiorAngle),
+                      type,
+                      g1:         fg1.matIdx,
+                      g2:         fg2.matIdx,
+                      v1,
+                      v2,
+                    })
+                  }
+                }
+              }
+            }
           }
         }
       }
