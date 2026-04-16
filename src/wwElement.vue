@@ -204,16 +204,6 @@ export default {
       : null
     const setBodyOfRevolutionVar = (val) => _wwBoRVar?.setValue?.(val)
 
-    const _wwThinWallsVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
-      ? wwLib.wwVariable.useComponentVariable({
-          uid:          props.uid,
-          name:         'thinWalls',
-          type:         'array',
-          defaultValue: [],
-        })
-      : null
-    const setThinWallsVar = (val) => _wwThinWallsVar?.setValue?.(val)
-
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -228,9 +218,7 @@ export default {
     let keyLight       = null
     let facesData      = []   // unified face list for click enrichment
     let holeMeshNames  = new Set()  // mesh names belonging to full holes (arcDeg ≥ 350)
-    let edgeLines        = []   // LineSegments overlaying hard geometric edges
-    let thinWallOverlays = []   // overlay meshes for detected thin-wall faces
-    let thinWallsData    = []   // detected thin-wall entries (cleared each load)
+    let edgeLines      = []   // LineSegments overlaying hard geometric edges
 
     let clickableMeshes    = []
     // Multi-selection: [{mesh, groupIndex, overlay, faceIndex, point, normal, meshName, objectName, userData}]
@@ -1243,127 +1231,6 @@ export default {
       }
     }
 
-    // ─── Thin wall detection ──────────────────────────────────────────────────
-    const clearThinWallOverlays = () => {
-      thinWallOverlays.forEach(o => {
-        scene?.remove(o)
-        o.geometry?.dispose()
-        o.material?.dispose()
-      })
-      thinWallOverlays = []
-    }
-
-    // Ray-cast inward from each face group centroid to find opposing wall distance.
-    // Returns an array of { meshName, objectName, materialIndex, faceIndex, thickness, center }.
-    const detectThinWalls = (threshold) => {
-      if (!clickableMeshes.length || !raycaster) return []
-
-      const thresh  = (typeof threshold === 'number' && threshold > 0) ? threshold : 2
-      const results = []
-
-      // Temporarily set all materials to DoubleSide so back faces are intersectable
-      const origSides = new Map()
-      for (const mesh of clickableMeshes) {
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-        origSides.set(mesh, mats.map(m => m?.side))
-        mats.forEach(m => { if (m) m.side = THREE.DoubleSide })
-      }
-
-      const _p  = new THREE.Vector3()
-      const _n  = new THREE.Vector3()
-      const _nm = new THREE.Matrix3()
-
-      for (const mesh of clickableMeshes) {
-        const geo = mesh.geometry
-        if (!geo?.attributes?.position || !geo?.attributes?.normal) continue
-
-        const posAttr  = geo.attributes.position
-        const normAttr = geo.attributes.normal
-
-        const groups = geo.groups?.length > 0
-          ? geo.groups
-          : [{ start: 0, count: geo.index ? geo.index.count : posAttr.count, materialIndex: 0 }]
-
-        mesh.updateWorldMatrix(true, false)
-        const wm = mesh.matrixWorld
-        _nm.getNormalMatrix(wm)
-
-        for (const group of groups) {
-          // Sample up to 64 vertices from this group
-          const raw = []
-          if (geo.index) {
-            const arr = geo.index.array
-            for (let i = group.start; i < group.start + group.count; i++) raw.push(arr[i])
-          } else {
-            for (let i = group.start; i < group.start + group.count; i++) raw.push(i)
-          }
-          const unique  = [...new Set(raw)]
-          const step    = Math.max(1, Math.floor(unique.length / 64))
-          const sampled = unique.filter((_, idx) => idx % step === 0)
-          if (sampled.length < 3) continue
-
-          // Accumulate world-space centroid and average outward normal
-          const centroid  = new THREE.Vector3()
-          const avgNormal = new THREE.Vector3()
-          for (const vi of sampled) {
-            _p.set(posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)).applyMatrix4(wm)
-            _n.set(normAttr.getX(vi), normAttr.getY(vi), normAttr.getZ(vi)).applyMatrix3(_nm).normalize()
-            centroid.add(_p)
-            avgNormal.add(_n)
-          }
-          centroid.divideScalar(sampled.length)
-          if (avgNormal.lengthSq() < 0.0001) continue
-          avgNormal.normalize()
-
-          const epsilon = Math.max(modelRadius * 0.001, 0.001)
-          const origin  = centroid.clone().addScaledVector(avgNormal, epsilon)
-          const dir     = avgNormal.clone().negate()
-
-          raycaster.set(origin, dir)
-          const hits = raycaster.intersectObjects(clickableMeshes, false)
-
-          // Skip self-hits (distance ≤ epsilon*2); take the first real back-wall hit
-          const backHit = hits.find(h => h.distance > epsilon * 2)
-          if (!backHit) continue
-
-          const thickness = backHit.distance
-          if (thickness < thresh) {
-            const round = v => Math.round(v * 1000) / 1000
-            results.push({
-              meshName:      mesh.name || '',
-              objectName:    mesh.parent?.name || mesh.name || '',
-              materialIndex: group.materialIndex ?? 0,
-              faceIndex:     Math.floor(group.start / 3),
-              thickness:     round(thickness),
-              center:        { x: round(centroid.x), y: round(centroid.y), z: round(centroid.z) },
-            })
-          }
-        }
-      }
-
-      // Restore original material sides
-      for (const mesh of clickableMeshes) {
-        const sides = origSides.get(mesh)
-        if (!sides) continue
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-        mats.forEach((m, i) => { if (m && sides[i] !== undefined) m.side = sides[i] })
-      }
-
-      return results
-    }
-
-    const buildThinWallOverlays = (thinWalls) => {
-      clearThinWallOverlays()
-      if (!loadedModel || !props.content?.showThinWalls || !thinWalls.length) return
-      const color = props.content?.thinWallColor || '#ff4444'
-      for (const tw of thinWalls) {
-        const mesh = clickableMeshes.find(m => m.name === tw.meshName)
-        if (!mesh) continue
-        const overlay = makeOverlayMesh(mesh, tw.faceIndex, color, -1)
-        thinWallOverlays.push(overlay)
-      }
-    }
-
     // ─── Annotation overlays ──────────────────────────────────────────────────
     const clearAnnotationOverlays = () => {
       annotationOverlays.forEach(a => removeOverlay(a.overlay))
@@ -1518,10 +1385,8 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
-      clearThinWallOverlays()
       removeEdges()
-      facesData     = []
-      thinWallsData = []
+      facesData = []
       holeMeshNames = new Set()
 
       try {
@@ -1636,15 +1501,6 @@ export default {
           }
         }
         setFacesVar(allFaces)
-
-        // Detect thin walls and build overlays
-        thinWallsData = detectThinWalls(props.content?.thinWallThreshold ?? 2)
-        setThinWallsVar(thinWallsData)
-        buildThinWallOverlays(thinWallsData)
-        emit('trigger-event', {
-          name:  'thin-walls-detected',
-          event: { thinWalls: thinWallsData, count: thinWallsData.length },
-        })
 
         const holeCount = mergedCylinders.filter(c => c.isHole === true).length
         const bossCount = mergedCylinders.filter(c => c.isHole === false).length
@@ -1949,14 +1805,6 @@ export default {
       annotationOverlays.forEach(a => a.overlay?.material?.color?.set(color || '#ff6b35'))
     })
 
-    watch(() => props.content?.showThinWalls, () => {
-      if (libsReady.value && loadedModel) buildThinWallOverlays(thinWallsData)
-    })
-
-    watch(() => props.content?.thinWallColor, (color) => {
-      thinWallOverlays.forEach(o => o.material?.color?.set(color || '#ff4444'))
-    })
-
     watch(() => props.content?.showEdges, () => {
       if (libsReady.value && loadedModel) buildEdges()
     })
@@ -2011,9 +1859,7 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
-      clearThinWallOverlays()
-      facesData     = []
-      thinWallsData = []
+      facesData = []
       holeMeshNames = new Set()
       removeEdges()
       overrideMaterials.forEach(m => m.dispose())
