@@ -1047,13 +1047,28 @@ export default {
 
     // ─── Selection management ─────────────────────────────────────────────────
     const clearAllSelections = () => {
-      selections.forEach(s => removeOverlay(s.overlay))
+      selections.forEach(s => s.overlays?.forEach(o => removeOverlay(o)))
       selections = []
       selectionLabel.value = ''
     }
 
     // Keep alias used by resetCamera
     const deselectMesh = clearAllSelections
+
+    // Build overlay meshes for a selection. For merged cylinders, creates one overlay
+    // per constituent mesh so the full 360° surface is highlighted, not just the clicked half.
+    const buildSelectionOverlays = (clickedMesh, faceIndex, faceData) => {
+      const color = props.content?.selectionColor || '#1a73e8'
+      const overlays = [makeOverlayMesh(clickedMesh, faceIndex, color, -2)]
+      if (faceData?.merged && Array.isArray(faceData.meshNames)) {
+        for (const name of faceData.meshNames) {
+          if (name === clickedMesh.name) continue
+          const m = clickableMeshes.find(cm => cm.name === name)
+          if (m) overlays.push(makeOverlayMesh(m, 0, color, -2))
+        }
+      }
+      return overlays
+    }
 
     const updateSelectionLabel = () => {
       if (selections.length === 0) {
@@ -1502,11 +1517,11 @@ export default {
             s => s.mesh === mesh && s.groupIndex === groupIdx
           )
           if (existingIdx >= 0) {
-            removeOverlay(selections[existingIdx].overlay)
+            selections[existingIdx].overlays?.forEach(o => removeOverlay(o))
             selections.splice(existingIdx, 1)
           } else {
-            const overlay = makeOverlayMesh(mesh, fi, props.content?.selectionColor || '#1a73e8', -2)
-            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry, faceData })
+            const overlays = buildSelectionOverlays(mesh, fi, faceData)
+            selections.push({ mesh, groupIndex: groupIdx, overlays, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry, faceData })
             emit('trigger-event', {
               name:  'face-selected',
               event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich },
@@ -1521,8 +1536,8 @@ export default {
 
           if (!alreadySingle) {
             clearAllSelections()
-            const overlay = makeOverlayMesh(mesh, fi, props.content?.selectionColor || '#1a73e8', -2)
-            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry, faceData })
+            const overlays = buildSelectionOverlays(mesh, fi, faceData)
+            selections.push({ mesh, groupIndex: groupIdx, overlays, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry, faceData })
             emit('trigger-event', {
               name:  'face-selected',
               event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich },
@@ -1676,7 +1691,7 @@ export default {
     })
 
     watch(() => props.content?.selectionColor, (color) => {
-      selections.forEach(s => s.overlay?.material?.color?.set(color || '#1a73e8'))
+      selections.forEach(s => s.overlays?.forEach(o => o.material?.color?.set(color || '#1a73e8')))
       focusedHoleOverlays.forEach(o => o.material?.color?.set(color || '#1a73e8'))
     })
 
