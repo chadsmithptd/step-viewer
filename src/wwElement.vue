@@ -1429,7 +1429,7 @@ export default {
         modelRadius = maxDim * 0.6
 
         const fov  = camera.fov * (Math.PI / 180)
-        const dist = (maxDim / 2) / Math.tan(fov / 2) * 1.5
+        const dist = (maxDim / 2) / Math.tan(fov / 2) * 0.75
 
         camera.position.set(center.x + dist, center.y + dist * 0.7, center.z + dist)
         camera.near = maxDim * 0.0001
