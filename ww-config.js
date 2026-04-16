@@ -221,20 +221,28 @@ export default {
       name: 'face-selected',
       label: { en: 'On Face Selected' },
       event: {
-        faceIndex:  0,
-        groupIndex: 0,
-        meshName:   '',
-        objectName: '',
-        point:  { x: 0, y: 0, z: 0 },
-        normal: { x: 0, y: 0, z: 0 },
-        userData: {},
-        faceType: '',     // 'cylindrical' | 'planar' | 'unknown'
-        shape:    null,   // 'circular' | 'other' | null  (planar faces only)
-        diameter: null,   // number | null  (model units)
-        depth:    null,   // number | null  (cylindrical faces only)
-        axis:     null,   // {x,y,z} | null  (cylinder axis or face normal)
-        arcDeg:   null,   // number | null  — degrees of angular coverage (360 = full cylinder)
-        is360:    null,   // boolean | null — true only for full 360° cylindrical surfaces
+        faceIndex:   0,
+        groupIndex:  0,
+        meshName:    '',
+        objectName:  '',
+        point:       { x: 0, y: 0, z: 0 },
+        normal:      { x: 0, y: 0, z: 0 },
+        userData:    {},
+        faceType:    '',    // 'cylindrical' | 'planar' | 'conical' | 'toroidal' | 'unknown'
+        surfaceType: '',    // 'Cylinder' | 'Plane' | 'Cone' | 'Torus' | 'Unknown'
+        shape:       null,  // 'circular' | 'other' | null  (planar faces only)
+        diameter:    null,  // number | null
+        depth:       null,  // number | null  (cylindrical faces only)
+        halfAngle:   null,  // number | null  (conical faces only — degrees)
+        axis:        null,  // {x,y,z} | null
+        center:      null,  // {x,y,z} | null  (cylindrical faces only)
+        arcDeg:      null,  // number | null  — degrees of angular coverage
+        is360:       null,  // boolean | null — true only for full 360° cylindrical surfaces
+        isHole:      false, // boolean — true when face is a concave cylindrical bore
+        isConcave:   null,  // boolean | null — true when normals point inward
+        merged:      false, // boolean — true when face was merged from split B-Rep halves
+        mergedCount: null,  // number | null — how many raw faces were merged
+        meshNames:   null,  // string[] | null — all mesh names for merged faces
       },
       default: true,
     },
