@@ -229,8 +229,7 @@ export default {
     let facesData      = []   // unified face list for click enrichment
     let holeMeshNames  = new Set()  // mesh names belonging to full holes (arcDeg ≥ 350)
     let edgeLines        = []   // LineSegments overlaying hard geometric edges
-    let cornerLines      = []   // LineSegments for acute/obtuse corner edges
-    let cornersRawEdges  = []   // raw edge list used for rendering (persists across color changes)
+    let cornerOverlays   = []   // face overlays for acute/obtuse corner faces
     let cornersData      = []   // deduplicated corner entries (exposed via variable)
 
     let clickableMeshes    = []
@@ -1425,6 +1424,7 @@ export default {
                   if (!existing || deviation > Math.abs(existing.angle - 90)) {
                     pairMap.set(pairId, {
                       meshName:   fg1.meshName,
+                      mesh2Name:  fg2.meshName,
                       objectName: fg1.objectName,
                       angle:      round(interiorAngle),
                       type,
@@ -1444,39 +1444,43 @@ export default {
       return { data: [...pairMap.values()], rawEdges }
     }
 
-    const clearCornerLines = () => {
-      cornerLines.forEach(l => {
-        scene?.remove(l)
-        l.geometry?.dispose()
-        l.material?.dispose()
-      })
-      cornerLines = []
+    const clearCornerOverlays = () => {
+      cornerOverlays.forEach(o => removeOverlay(o))
+      cornerOverlays = []
     }
 
-    const buildCornerLines = (rawEdges) => {
-      clearCornerLines()
-      if (!loadedModel || !props.content?.showCorners || !rawEdges.length) return
+    // Highlights both faces of each flagged pair using the proven overlay infrastructure
+    // (same path as selections/annotations — MeshBasicMaterial, renderOrder 2, polygon offset).
+    const buildCornerOverlays = (data) => {
+      clearCornerOverlays()
+      if (!loadedModel || !props.content?.showCorners || !data.length) return
 
-      const acute  = rawEdges.filter(e => e.type === 'acute')
-      const obtuse = rawEdges.filter(e => e.type === 'obtuse')
-
-      const makeSegments = (edges, color) => {
-        if (!edges.length) return
-        const pos = new Float32Array(edges.length * 6)
-        edges.forEach((e, i) => {
-          pos[i * 6 + 0] = e.v1.x; pos[i * 6 + 1] = e.v1.y; pos[i * 6 + 2] = e.v1.z
-          pos[i * 6 + 3] = e.v2.x; pos[i * 6 + 4] = e.v2.y; pos[i * 6 + 5] = e.v2.z
-        })
-        const geo   = new THREE.BufferGeometry()
-        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-        const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: new THREE.Color(color) }))
-        lines.renderOrder = 3
-        scene.add(lines)
-        cornerLines.push(lines)
+      // Helper: find the first faceIndex belonging to a specific materialIndex group
+      const getFaceIdx = (mesh, matIdx) => {
+        if (!mesh?.geometry?.groups?.length) return 0
+        const grp = mesh.geometry.groups.find(g => (g.materialIndex ?? 0) === matIdx)
+        return grp ? Math.floor(grp.start / 3) : 0
       }
 
-      makeSegments(acute,  props.content?.acuteCornerColor  || '#ff4444')
-      makeSegments(obtuse, props.content?.obtuseCornerColor || '#ffaa00')
+      // Deduplicate by (meshName, matIdx) so each face is overlaid once
+      const overlaid = new Set()
+
+      for (const entry of data) {
+        const color = entry.type === 'acute'
+          ? (props.content?.acuteCornerColor  || '#ff4444')
+          : (props.content?.obtuseCornerColor || '#ffaa00')
+
+        const add = (mName, matIdx) => {
+          const key = `${mName}_${matIdx}`
+          if (overlaid.has(key)) return
+          overlaid.add(key)
+          const m = clickableMeshes.find(cm => cm.name === mName)
+          if (m) cornerOverlays.push(makeOverlayMesh(m, getFaceIdx(m, matIdx), color, -1))
+        }
+
+        add(entry.meshName,  entry.g1)
+        add(entry.mesh2Name, entry.g2)
+      }
     }
 
     // ─── Annotation overlays ──────────────────────────────────────────────────
@@ -1634,11 +1638,10 @@ export default {
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
       removeEdges()
-      clearCornerLines()
-      facesData        = []
-      cornersData      = []
-      cornersRawEdges  = []
-      holeMeshNames    = new Set()
+      clearCornerOverlays()
+      facesData    = []
+      cornersData  = []
+      holeMeshNames = new Set()
 
       try {
         const loader = new GLTFLoader()
@@ -1755,10 +1758,9 @@ export default {
 
         // Detect and render sharp / non-90° corners
         const cornerResult = detectSharpCorners(props.content?.cornerAngleTolerance ?? 10)
-        cornersData     = cornerResult.data
-        cornersRawEdges = cornerResult.rawEdges
+        cornersData = cornerResult.data
         setSharpCornersVar(cornersData)
-        buildCornerLines(cornersRawEdges)
+        buildCornerOverlays(cornersData)
         emit('trigger-event', {
           name:  'sharp-corners-detected',
           event: {
@@ -2083,10 +2085,9 @@ export default {
     watch(() => props.content?.cornerAngleTolerance, () => {
       if (!libsReady.value || !loadedModel) return
       const result = detectSharpCorners(props.content?.cornerAngleTolerance ?? 10)
-      cornersData     = result.data
-      cornersRawEdges = result.rawEdges
+      cornersData = result.data
       setSharpCornersVar(cornersData)
-      buildCornerLines(cornersRawEdges)
+      buildCornerOverlays(cornersData)
       emit('trigger-event', {
         name:  'sharp-corners-detected',
         event: {
@@ -2098,11 +2099,11 @@ export default {
     })
 
     watch(() => props.content?.showCorners, () => {
-      if (libsReady.value && loadedModel) buildCornerLines(cornersRawEdges)
+      if (libsReady.value && loadedModel) buildCornerOverlays(cornersData)
     })
 
     watch(() => [props.content?.acuteCornerColor, props.content?.obtuseCornerColor], () => {
-      if (libsReady.value && loadedModel) buildCornerLines(cornersRawEdges)
+      if (libsReady.value && loadedModel) buildCornerOverlays(cornersData)
     })
 
     watch(() => props.content?.showGrid, (show) => {
@@ -2151,11 +2152,10 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
-      clearCornerLines()
-      facesData       = []
-      cornersData     = []
-      cornersRawEdges = []
-      holeMeshNames   = new Set()
+      clearCornerOverlays()
+      facesData    = []
+      cornersData  = []
+      holeMeshNames = new Set()
       removeEdges()
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
