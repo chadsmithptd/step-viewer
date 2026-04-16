@@ -202,6 +202,21 @@ export default {
       /* wwEditor:end */
     },
 
+    zoomLevel: {
+      label: { en: 'Default Zoom Level' },
+      type: 'Number',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 0.75,
+      options: { min: 0, max: 1, step: 0.01 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: '0 = zoomed out, 1 = zoomed in. Sets the camera distance on model load and on reset.',
+      },
+      /* wwEditor:end */
+    },
+
     showEdges: {
       label: { en: 'Show Edges' },
       type: 'OnOff',

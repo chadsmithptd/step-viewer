@@ -219,6 +219,7 @@ export default {
     let facesData      = []   // unified face list for click enrichment
     let holeMeshNames  = new Set()  // mesh names belonging to full holes (arcDeg ≥ 350)
     let edgeLines      = []   // LineSegments overlaying hard geometric edges
+    let modelMaxDim    = 0    // stored for zoom watcher to recompute defaultCameraPos
 
     let clickableMeshes    = []
     // Multi-selection: [{mesh, groupIndex, overlay, faceIndex, point, normal, meshName, objectName, userData}]
@@ -1427,9 +1428,11 @@ export default {
         const maxDim = Math.max(size.x, size.y, size.z)
 
         modelRadius = maxDim * 0.6
+        modelMaxDim = maxDim
 
-        const fov  = camera.fov * (Math.PI / 180)
-        const dist = (maxDim / 2) / Math.tan(fov / 2) * 0.75
+        const fov      = camera.fov * (Math.PI / 180)
+        const zl       = Math.max(0, Math.min(1, props.content?.zoomLevel ?? 0.75))
+        const dist     = (maxDim / 2) / Math.tan(fov / 2) * (2.0 * (1 - zl) + 0.25)
 
         camera.position.set(center.x + dist, center.y + dist * 0.7, center.z + dist)
         camera.near = maxDim * 0.0001
@@ -1803,6 +1806,18 @@ export default {
 
     watch(() => props.content?.annotationColor, (color) => {
       annotationOverlays.forEach(a => a.overlay?.material?.color?.set(color || '#ff6b35'))
+    })
+
+    watch(() => props.content?.zoomLevel, (zoom) => {
+      if (!defaultTarget || !modelMaxDim || !camera) return
+      const zl   = Math.max(0, Math.min(1, zoom ?? 0.75))
+      const fov  = camera.fov * (Math.PI / 180)
+      const dist = (modelMaxDim / 2) / Math.tan(fov / 2) * (2.0 * (1 - zl) + 0.25)
+      defaultCameraPos = new THREE.Vector3(
+        defaultTarget.x + dist,
+        defaultTarget.y + dist * 0.7,
+        defaultTarget.z + dist,
+      )
     })
 
     watch(() => props.content?.showEdges, () => {
