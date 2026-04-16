@@ -173,20 +173,6 @@ export default {
       /* wwEditor:end */
     },
 
-    focusedHoleColor: {
-      label: { en: 'Focused Hole Color' },
-      type: 'Color',
-      section: 'style',
-      bindable: true,
-      defaultValue: '#ffcc00',
-      /* wwEditor:start */
-      bindingValidation: {
-        type: 'string',
-        tooltip: 'Highlight color applied to the hole selected from the list',
-      },
-      /* wwEditor:end */
-    },
-
     selectionColor: {
       label: { en: 'Selection Highlight Color' },
       type: 'Color',

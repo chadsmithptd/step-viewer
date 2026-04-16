@@ -1635,7 +1635,7 @@ export default {
       const names = Array.isArray(hole.meshNames) ? hole.meshNames : [hole.meshName].filter(Boolean)
       for (const name of names) {
         const mesh = clickableMeshes.find(m => m.name === name)
-        if (mesh) focusedHoleOverlays.push(makeOverlayMesh(mesh, 0, props.content?.focusedHoleColor || '#ffcc00', -3))
+        if (mesh) focusedHoleOverlays.push(makeOverlayMesh(mesh, 0, props.content?.selectionColor || '#1a73e8', -3))
       }
     }
 
@@ -1664,10 +1664,6 @@ export default {
       else applyModelOpacity(opacity ?? 1)
     })
 
-    watch(() => props.content?.focusedHoleColor, (color) => {
-      focusedHoleOverlays.forEach(o => o.material.color.set(color || '#ffcc00'))
-    })
-
     watch(() => props.content?.backgroundColor, (color) => {
       if (!scene || !renderer) return
       if (color) {
@@ -1681,6 +1677,7 @@ export default {
 
     watch(() => props.content?.selectionColor, (color) => {
       selections.forEach(s => s.overlay?.material?.color?.set(color || '#1a73e8'))
+      focusedHoleOverlays.forEach(o => o.material?.color?.set(color || '#1a73e8'))
     })
 
     watch(() => props.content?.annotationColor, (color) => {
