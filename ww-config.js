@@ -158,6 +158,21 @@ export default {
       /* wwEditor:end */
     },
 
+    modelOpacity: {
+      label: { en: 'Model Opacity' },
+      type: 'Number',
+      section: 'style',
+      bindable: true,
+      defaultValue: 1,
+      options: { min: 0, max: 1, step: 0.01 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Model opacity from 0 (invisible) to 1 (fully opaque). Hole highlights and selections retain full color.',
+      },
+      /* wwEditor:end */
+    },
+
     focusedHoleColor: {
       label: { en: 'Focused Hole Color' },
       type: 'Color',

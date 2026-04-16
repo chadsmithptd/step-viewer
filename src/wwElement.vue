@@ -1122,16 +1122,38 @@ export default {
       })
     }
 
+    const applyModelOpacity = (opacity) => {
+      if (!loadedModel) return
+      const op = (typeof opacity === 'number' && opacity >= 0 && opacity <= 1) ? opacity : 1
+      const needsTransparency = op < 1
+      loadedModel.traverse(obj => {
+        if (!obj.isMesh) return
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
+        mats.forEach(m => {
+          if (!m) return
+          m.transparent = needsTransparency
+          m.opacity     = op
+          m.depthWrite  = !needsTransparency
+          m.needsUpdate = true
+        })
+      })
+    }
+
     const applyColorOverride = (color) => {
       if (!loadedModel) return
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
+      const op = props.content?.modelOpacity ?? 1
+      const needsTransparency = typeof op === 'number' && op < 1
       loadedModel.traverse(obj => {
         if (!obj.isMesh) return
         const mat = new THREE.MeshStandardMaterial({
-          color:     new THREE.Color(color || '#cccccc'),
-          roughness: 0.35,
-          metalness: 0.1,
+          color:       new THREE.Color(color || '#cccccc'),
+          roughness:   0.35,
+          metalness:   0.1,
+          transparent: needsTransparency,
+          opacity:     needsTransparency ? op : 1,
+          depthWrite:  !needsTransparency,
         })
         obj.material = mat
         overrideMaterials.push(mat)
@@ -1147,6 +1169,7 @@ export default {
       })
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
+      applyModelOpacity(props.content?.modelOpacity ?? 1)
     }
 
     const clearFocusedHoleOverlay = () => {
@@ -1328,6 +1351,7 @@ export default {
 
         storeOriginalMaterials()
         if (props.content?.overrideColor) applyColorOverride(props.content?.modelColor || '#cccccc')
+        else if ((props.content?.modelOpacity ?? 1) < 1) applyModelOpacity(props.content.modelOpacity)
 
         const box    = new THREE.Box3().setFromObject(loadedModel, true)
         const center = box.getCenter(new THREE.Vector3())
@@ -1629,6 +1653,12 @@ export default {
       if (!loadedModel) return
       if (override) applyColorOverride(color || '#cccccc')
       else removeColorOverride()
+    })
+
+    watch(() => props.content?.modelOpacity, (opacity) => {
+      if (!loadedModel) return
+      if (props.content?.overrideColor) applyColorOverride(props.content?.modelColor || '#cccccc')
+      else applyModelOpacity(opacity ?? 1)
     })
 
     watch(() => props.content?.focusedHoleColor, (color) => {
