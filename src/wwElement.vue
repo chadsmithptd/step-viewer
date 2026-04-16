@@ -164,16 +164,6 @@ export default {
       : null
     const setMultiSelectionVar = (val) => _wwVar?.setValue?.(val)
 
-    const _wwHolesVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
-      ? wwLib.wwVariable.useComponentVariable({
-          uid:          props.uid,
-          name:         'holes',
-          type:         'array',
-          defaultValue: [],
-        })
-      : null
-    const setHolesVar = (val) => _wwHolesVar?.setValue?.(val)
-
     const _wwPartPropsVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
       ? wwLib.wwVariable.useComponentVariable({
           uid:          props.uid,
@@ -224,6 +214,7 @@ export default {
     let resizeObserver = null
     let loadedModel    = null
     let gridHelper     = null
+    let facesData      = []   // unified face list for click enrichment
 
     let clickableMeshes    = []
     // Multi-selection: [{mesh, groupIndex, overlay, faceIndex, point, normal, meshName, objectName, userData}]
@@ -446,9 +437,17 @@ export default {
       return { faceType: 'unknown', diameter: null, depth: null, axis: null }
     }
 
-    // ─── Full-model cylinder scan (runs once on load) ─────────────────────────
-    // Returns every cylindrical face with isHole flag (concave = hole, convex = boss).
-    const analyzeAllFaces = () => {
+    // ─── Full-model face scan (runs once on load) ─────────────────────────────
+    // Returns every face on every mesh. Cylindrical faces include isConcave/isHole
+    // via the concavity test; all other surface types get isHole: false.
+    const buildAllFaces = () => {
+      const typeLabel = {
+        planar:      'Plane',
+        cylindrical: 'Cylinder',
+        conical:     'Cone',
+        toroidal:    'Torus',
+        unknown:     'Unknown',
+      }
       const round   = v => Math.round(v * 1000) / 1000
       const results = []
 
@@ -456,20 +455,18 @@ export default {
         const geo = mesh.geometry
         if (!geo?.attributes?.position) continue
 
-        // No groups → treat entire mesh as one face
         const groups = geo.groups?.length > 0
           ? geo.groups
-          : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes.position.count }]
+          : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes.position.count, materialIndex: 0 }]
 
         for (const group of groups) {
           const faceIndex = Math.floor(group.start / 3)
           const result    = analyzeFaceGeometry(mesh, faceIndex)
-          if (result.faceType !== 'cylindrical') continue
 
-          // Hole vs boss: dot(centroid − vertex, normal) > 0 → concave (hole)
           let isConcave = null
-          let isHole    = null
-          if (result._centroid) {
+          let isHole    = false
+
+          if (result.faceType === 'cylindrical' && result._centroid) {
             const posAttr  = geo.attributes.position
             const normAttr = geo.attributes.normal
             if (posAttr && normAttr) {
@@ -481,7 +478,7 @@ export default {
               const nor = new THREE.Vector3(normAttr.getX(vi), normAttr.getY(vi), normAttr.getZ(vi)).applyMatrix3(nm).normalize()
               // Concave (normals point toward axis center) → candidate hole piece.
               // A single piece only qualifies as a full hole if it wraps the full 360°;
-              // partial arcs are promoted later by mergeCylinders when their combined arc ≥ 300°.
+              // partial arcs are promoted later by mergeCylinders when combined arc ≥ 300°.
               isConcave = result._centroid.clone().sub(pos).dot(nor) > 0
               isHole    = isConcave && (result.is360 === true)
             }
@@ -489,13 +486,16 @@ export default {
 
           const c = result._centroid
           results.push({
-            meshName:   mesh.name || '',
-            objectName: mesh.parent?.name || mesh.name || '',
-            diameter:   result.diameter,
-            depth:      result.depth,
-            axis:       result.axis,
-            center:     c ? { x: round(c.x), y: round(c.y), z: round(c.z) } : null,
-            arcDeg:     result.arcDeg ?? null,
+            meshName:      mesh.name || '',
+            objectName:    mesh.parent?.name || mesh.name || '',
+            materialIndex: group.materialIndex ?? 0,
+            surfaceType:   typeLabel[result.faceType] ?? 'Unknown',
+            diameter:      result.diameter  ?? null,
+            depth:         result.depth     ?? null,
+            halfAngle:     result.halfAngle ?? null,
+            arcDeg:        result.arcDeg    ?? null,
+            axis:          result.axis      ?? null,
+            center:        c ? { x: round(c.x), y: round(c.y), z: round(c.z) } : null,
             isConcave,
             isHole,
           })
@@ -618,6 +618,7 @@ export default {
           meshName:    members[0].meshName,
           meshNames:   members.map(m => m.meshName),
           objectName:  base.objectName,
+          surfaceType: 'Cylinder',
           diameter:    avgDiam,
           depth:       mergedDepth,
           axis:        { x: round(normAx.x), y: round(normAx.y), z: round(normAx.z) },
@@ -631,41 +632,6 @@ export default {
       }
 
       return merged
-    }
-
-    // ─── All-faces list (runs once on load) ───────────────────────────────────
-    // Classifies every face mesh and returns a flat list with surfaceType string.
-    const buildFacesList = () => {
-      const typeLabel = {
-        planar:     'Plane',
-        cylindrical:'Cylinder',
-        conical:    'Cone',
-        toroidal:   'Torus',
-        unknown:    'Unknown',
-      }
-      const list = []
-      for (const mesh of clickableMeshes) {
-        const geo    = mesh.geometry
-        const groups = geo.groups?.length > 0
-          ? geo.groups
-          : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes?.position?.count ?? 0 }]
-
-        for (const group of groups) {
-          const result = analyzeFaceGeometry(mesh, Math.floor(group.start / 3))
-          list.push({
-            meshName:    mesh.name || '',
-            objectName:  mesh.parent?.name || mesh.name || '',
-            surfaceType: typeLabel[result.faceType] ?? 'Unknown',
-            // Include extra fields for Cylinder and Cone — useful for downstream logic
-            diameter:    result.diameter   ?? null,
-            depth:       result.depth      ?? null,
-            halfAngle:   result.halfAngle  ?? null,
-            arcDeg:      result.arcDeg     ?? null,
-            axis:        result.axis       ?? null,
-          })
-        }
-      }
-      return list
     }
 
     // ─── Part-level geometry analysis (surface area + volume) ────────────────
@@ -1071,6 +1037,14 @@ export default {
       overlay.material.dispose()
     }
 
+    // Look up a face entry from the pre-computed unified list by mesh name + material index.
+    // Falls back to searching merged-cylinder entries (which span multiple mesh names).
+    const getFaceData = (meshName, materialIdx) => {
+      const exact = facesData.find(f => f.meshName === meshName && f.materialIndex === materialIdx)
+      if (exact) return exact
+      return facesData.find(f => Array.isArray(f.meshNames) && f.meshNames.includes(meshName)) ?? null
+    }
+
     // ─── Selection management ─────────────────────────────────────────────────
     const clearAllSelections = () => {
       selections.forEach(s => removeOverlay(s.overlay))
@@ -1092,20 +1066,33 @@ export default {
     }
 
     const emitMultiSelection = () => {
-      const data = selections.map(s => ({
-        faceIndex:  s.faceIndex,
-        groupIndex: s.groupIndex,
-        meshName:   s.meshName,
-        objectName: s.objectName,
-        point:      s.point,
-        normal:     s.normal,
-        userData:   s.userData,
-        faceType:   s.faceType,
-        shape:      s.shape ?? null,
-        diameter:   s.diameter ?? null,
-        depth:      s.depth ?? null,
-        axis:       s.axis ?? null,
-      }))
+      const data = selections.map(s => {
+        const fd = s.faceData
+        return {
+          faceIndex:   s.faceIndex,
+          groupIndex:  s.groupIndex,
+          meshName:    s.meshName,
+          objectName:  s.objectName,
+          point:       s.point,
+          normal:      s.normal,
+          userData:    s.userData,
+          faceType:    s.faceType,
+          shape:       s.shape    ?? null,
+          diameter:    s.diameter ?? null,
+          depth:       s.depth    ?? null,
+          axis:        s.axis     ?? null,
+          arcDeg:      s.arcDeg   ?? null,
+          is360:       s.is360    ?? null,
+          surfaceType: fd?.surfaceType  ?? null,
+          isHole:      fd?.isHole       ?? false,
+          isConcave:   fd?.isConcave    ?? null,
+          center:      fd?.center       ?? null,
+          halfAngle:   fd?.halfAngle    ?? null,
+          merged:      fd?.merged       ?? false,
+          mergedCount: fd?.mergedCount  ?? null,
+          meshNames:   fd?.meshNames    ?? null,
+        }
+      })
       emit('trigger-event', {
         name:  'faces-selected',
         event: { selections: data, count: data.length },
@@ -1327,6 +1314,7 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
+      facesData = []
 
       try {
         const loader = new GLTFLoader()
@@ -1397,25 +1385,29 @@ export default {
         // Build annotation overlays now that clickableMeshes is populated
         buildAnnotationOverlays()
 
-        // Scan all faces for cylindrical geometry, merge split half-faces, emit holes manifest
-        const cylinders = mergeCylinders(analyzeAllFaces())
-        const holeCount = cylinders.filter(c => c.isHole === true).length
-        const bossCount = cylinders.filter(c => c.isHole === false).length
-        setHolesVar(cylinders)
+        // Build unified face list — all surface types; cylindrical faces carry isHole flag.
+        // Merge split half-cylinders before combining with non-cylindrical faces.
+        const rawFaces         = buildAllFaces()
+        const cylindricalFaces = rawFaces.filter(f => f.surfaceType === 'Cylinder')
+        const otherFaces       = rawFaces.filter(f => f.surfaceType !== 'Cylinder')
+        const mergedCylinders  = mergeCylinders(cylindricalFaces)
+        const allFaces         = [...otherFaces, ...mergedCylinders]
+        facesData = allFaces
+        setFacesVar(allFaces)
+
+        const holeCount = mergedCylinders.filter(c => c.isHole === true).length
+        const bossCount = mergedCylinders.filter(c => c.isHole === false).length
         emit('trigger-event', {
           name:  'holes-detected',
-          event: { cylinders, holeCount, bossCount },
+          event: { cylinders: mergedCylinders, holeCount, bossCount },
         })
-
-        // Classify every face and expose as a variable
-        setFacesVar(buildFacesList())
 
         // Compute surface area, volume, and bounding box
         const partProps = analyzeModelGeometry(box)
         setPartPropertiesVar(partProps)
 
         // Body of Revolution test — voxel IoU against a 180°-rotated copy
-        const bor = analyzeBodyOfRevolution(cylinders)
+        const bor = analyzeBodyOfRevolution(mergedCylinders)
         setBodyOfRevolutionVar(bor)
 
         emit('trigger-event', {
@@ -1476,6 +1468,17 @@ export default {
         const userData   = mesh.userData ?? {}
 
         const faceGeometry = analyzeFaceGeometry(mesh, fi)
+        const faceData     = getFaceData(meshName, groupIdx)
+        const faceEnrich   = faceData ? {
+          surfaceType: faceData.surfaceType,
+          isHole:      faceData.isHole,
+          isConcave:   faceData.isConcave,
+          center:      faceData.center,
+          halfAngle:   faceData.halfAngle    ?? null,
+          merged:      faceData.merged       ?? false,
+          mergedCount: faceData.mergedCount  ?? null,
+          meshNames:   faceData.meshNames    ?? null,
+        } : { isHole: false, isConcave: null, surfaceType: null, center: null, halfAngle: null, merged: false, mergedCount: null, meshNames: null }
 
         // ── Annotation check ─────────────────────────────────────────────────
         const matchedAnnotation = annotationOverlays.find(
@@ -1503,10 +1506,10 @@ export default {
             selections.splice(existingIdx, 1)
           } else {
             const overlay = makeOverlayMesh(mesh, fi, props.content?.selectionColor || '#1a73e8', -2)
-            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry })
+            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry, faceData })
             emit('trigger-event', {
               name:  'face-selected',
-              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry },
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich },
             })
           }
         } else {
@@ -1519,10 +1522,10 @@ export default {
           if (!alreadySingle) {
             clearAllSelections()
             const overlay = makeOverlayMesh(mesh, fi, props.content?.selectionColor || '#1a73e8', -2)
-            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry })
+            selections.push({ mesh, groupIndex: groupIdx, overlay, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry, faceData })
             emit('trigger-event', {
               name:  'face-selected',
-              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry },
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich },
             })
           }
         }
@@ -1730,6 +1733,7 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
+      facesData = []
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
       if (loadedModel) disposeObject(loadedModel)
