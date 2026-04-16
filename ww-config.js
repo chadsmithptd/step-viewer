@@ -272,6 +272,67 @@ export default {
       },
       /* wwEditor:end */
     },
+
+    // ── Corner angle detection ─────────────────────────────────────────────────
+    cornerAngleTolerance: {
+      label: { en: 'Corner Angle Tolerance (°)' },
+      type: 'Number',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 10,
+      options: { min: 0, max: 45, step: 1 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Angles within ±N° of 90° are acceptable. Corners outside this band are flagged as acute or obtuse.',
+      },
+      propertyHelp: 'Set to 10 to flag all corners below 80° (acute) or above 100° (obtuse).',
+      /* wwEditor:end */
+    },
+
+    showCorners: {
+      label: { en: 'Highlight Non-90° Corners' },
+      type: 'OnOff',
+      section: 'style',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Overlay colored lines on edges where faces meet at acute or obtuse angles.',
+      },
+      /* wwEditor:end */
+    },
+
+    acuteCornerColor: {
+      label: { en: 'Acute Corner Color (< 90°)' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#ff4444',
+      hidden: content => !content?.showCorners,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Color for edges where the interior angle is below 90° − tolerance.',
+      },
+      /* wwEditor:end */
+    },
+
+    obtuseCornerColor: {
+      label: { en: 'Obtuse Corner Color (> 90°)' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#ffaa00',
+      hidden: content => !content?.showCorners,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Color for edges where the interior angle is above 90° + tolerance.',
+      },
+      /* wwEditor:end */
+    },
   },
 
   triggerEvents: [
@@ -328,6 +389,15 @@ export default {
         cylinders:  [],  // all cylindrical faces — each has meshName, objectName, diameter, depth, axis, center, isHole
         holeCount:  0,   // concave cylinders (bores, holes)
         bossCount:  0,   // convex cylinders (pins, bosses)
+      },
+    },
+    {
+      name: 'sharp-corners-detected',
+      label: { en: 'On Sharp Corners Detected' },
+      event: {
+        corners:      [],  // deduplicated face-pair entries: { meshName, objectName, angle, type, g1, g2, v1, v2 }
+        acuteCount:   0,   // corners where interior angle < 90° − tolerance
+        obtuseCount:  0,   // corners where interior angle > 90° + tolerance
       },
     },
     {

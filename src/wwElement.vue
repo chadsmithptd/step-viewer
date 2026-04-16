@@ -204,6 +204,16 @@ export default {
       : null
     const setBodyOfRevolutionVar = (val) => _wwBoRVar?.setValue?.(val)
 
+    const _wwCornersVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'sharpCorners',
+          type:         'array',
+          defaultValue: [],
+        })
+      : null
+    const setSharpCornersVar = (val) => _wwCornersVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -218,7 +228,10 @@ export default {
     let keyLight       = null
     let facesData      = []   // unified face list for click enrichment
     let holeMeshNames  = new Set()  // mesh names belonging to full holes (arcDeg ≥ 350)
-    let edgeLines      = []   // LineSegments overlaying hard geometric edges
+    let edgeLines        = []   // LineSegments overlaying hard geometric edges
+    let cornerLines      = []   // LineSegments for acute/obtuse corner edges
+    let cornersRawEdges  = []   // raw edge list used for rendering (persists across color changes)
+    let cornersData      = []   // deduplicated corner entries (exposed via variable)
 
     let clickableMeshes    = []
     // Multi-selection: [{mesh, groupIndex, overlay, faceIndex, point, normal, meshName, objectName, userData}]
@@ -1231,6 +1244,179 @@ export default {
       }
     }
 
+    // ─── Sharp corner detection ───────────────────────────────────────────────
+    // Finds edges where adjacent face groups meet at an angle outside [90°±tol].
+    // Returns { data: deduplicatedCorners[], rawEdges: allFlaggedEdges[] }
+    // data entries:  { meshName, objectName, angle, type, g1, g2, v1, v2 }
+    // rawEdges:       { type, v1, v2 }   — used for LineSegments rendering
+    const detectSharpCorners = (tolerance) => {
+      if (!clickableMeshes.length) return { data: [], rawEdges: [] }
+
+      const tol          = Math.abs(typeof tolerance === 'number' ? tolerance : 10)
+      const acuteThresh  = 90 - tol
+      const obtuseThresh = 90 + tol
+      const round = v => Math.round(v * 100) / 100
+
+      const rawEdges = []
+      const pairMap  = new Map()  // key → most-extreme entry per face-pair
+
+      const _p0 = new THREE.Vector3()
+      const _p1 = new THREE.Vector3()
+      const _p2 = new THREE.Vector3()
+      const _e1 = new THREE.Vector3()
+      const _e2 = new THREE.Vector3()
+
+      for (const mesh of clickableMeshes) {
+        const geo = mesh.geometry
+        if (!geo?.attributes?.position) continue
+
+        const posAttr  = geo.attributes.position
+        const idxArr   = geo.index?.array
+        const triCount = idxArr ? idxArr.length / 3 : Math.floor(posAttr.count / 3)
+        if (triCount < 2) continue
+
+        mesh.updateWorldMatrix(true, false)
+        const wm = mesh.matrixWorld
+
+        // Map each triangle to its face group (materialIndex)
+        const triToGroup = new Int32Array(triCount)
+        const singleGroup = !geo.groups || geo.groups.length <= 1
+        if (!singleGroup) {
+          for (const g of geo.groups) {
+            const t0 = Math.floor(g.start / 3)
+            const t1 = Math.floor((g.start + g.count) / 3)
+            for (let t = t0; t < t1; t++) triToGroup[t] = g.materialIndex ?? 0
+          }
+        }
+
+        // Compute flat world-space normal per triangle (stored as Float32Array)
+        const triNormals = new Float32Array(triCount * 3)
+        for (let t = 0; t < triCount; t++) {
+          const i0 = idxArr ? idxArr[t * 3]     : t * 3
+          const i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1
+          const i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2
+          _p0.set(posAttr.getX(i0), posAttr.getY(i0), posAttr.getZ(i0)).applyMatrix4(wm)
+          _p1.set(posAttr.getX(i1), posAttr.getY(i1), posAttr.getZ(i1)).applyMatrix4(wm)
+          _p2.set(posAttr.getX(i2), posAttr.getY(i2), posAttr.getZ(i2)).applyMatrix4(wm)
+          _e1.subVectors(_p1, _p0)
+          _e2.subVectors(_p2, _p0)
+          const nx = _e1.y * _e2.z - _e1.z * _e2.y
+          const ny = _e1.z * _e2.x - _e1.x * _e2.z
+          const nz = _e1.x * _e2.y - _e1.y * _e2.x
+          const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1
+          triNormals[t * 3]     = nx / len
+          triNormals[t * 3 + 1] = ny / len
+          triNormals[t * 3 + 2] = nz / len
+        }
+
+        // Build edge → [triA, triB] adjacency map
+        const edgeMap = new Map()
+        for (let t = 0; t < triCount; t++) {
+          const i0 = idxArr ? idxArr[t * 3]     : t * 3
+          const i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1
+          const i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2
+          for (const [a, b] of [[i0, i1], [i1, i2], [i2, i0]]) {
+            const key = a < b ? `${a}_${b}` : `${b}_${a}`
+            const entry = edgeMap.get(key)
+            if (!entry) edgeMap.set(key, [t])
+            else if (entry.length === 1) entry.push(t)
+            // 3+ tris sharing an edge = non-manifold, skip
+          }
+        }
+
+        // Process each shared edge
+        for (const [key, tris] of edgeMap) {
+          if (tris.length !== 2) continue
+          const [t1, t2] = tris
+          const g1 = triToGroup[t1]
+          const g2 = triToGroup[t2]
+
+          // For grouped meshes: only check cross-group edges (real feature boundaries)
+          // For single-group meshes: skip near-flat tessellation edges
+          if (!singleGroup) {
+            if (g1 === g2) continue
+          }
+
+          const nx1 = triNormals[t1 * 3], ny1 = triNormals[t1 * 3 + 1], nz1 = triNormals[t1 * 3 + 2]
+          const nx2 = triNormals[t2 * 3], ny2 = triNormals[t2 * 3 + 1], nz2 = triNormals[t2 * 3 + 2]
+          const dot        = Math.max(-1, Math.min(1, nx1 * nx2 + ny1 * ny2 + nz1 * nz2))
+          const normalAngle  = Math.acos(dot) * 180 / Math.PI
+
+          // For single-group meshes, skip near-flat tessellation edges (< 15° crease)
+          if (singleGroup && normalAngle < 15) continue
+
+          // interior_dihedral = 180° - angle_between_outward_normals
+          const interiorAngle = 180 - normalAngle
+
+          if (interiorAngle >= acuteThresh && interiorAngle <= obtuseThresh) continue
+
+          // Retrieve edge vertex world positions
+          const [vi1, vi2] = key.split('_').map(Number)
+          _p0.set(posAttr.getX(vi1), posAttr.getY(vi1), posAttr.getZ(vi1)).applyMatrix4(wm)
+          _p1.set(posAttr.getX(vi2), posAttr.getY(vi2), posAttr.getZ(vi2)).applyMatrix4(wm)
+          const v1 = { x: round(_p0.x), y: round(_p0.y), z: round(_p0.z) }
+          const v2 = { x: round(_p1.x), y: round(_p1.y), z: round(_p1.z) }
+          const type = interiorAngle < acuteThresh ? 'acute' : 'obtuse'
+
+          rawEdges.push({ type, v1, v2 })
+
+          // Deduplicate by face-pair: keep the entry with the most extreme angle
+          const pairKey = `${mesh.name}_${Math.min(g1, g2)}_${Math.max(g1, g2)}`
+          const existing = pairMap.get(pairKey)
+          const deviation = Math.abs(interiorAngle - 90)
+          if (!existing || deviation > Math.abs(existing.angle - 90)) {
+            pairMap.set(pairKey, {
+              meshName:   mesh.name   || '',
+              objectName: mesh.parent?.name || mesh.name || '',
+              angle:      round(interiorAngle),
+              type,
+              g1,
+              g2,
+              v1,
+              v2,
+            })
+          }
+        }
+      }
+
+      return { data: [...pairMap.values()], rawEdges }
+    }
+
+    const clearCornerLines = () => {
+      cornerLines.forEach(l => {
+        scene?.remove(l)
+        l.geometry?.dispose()
+        l.material?.dispose()
+      })
+      cornerLines = []
+    }
+
+    const buildCornerLines = (rawEdges) => {
+      clearCornerLines()
+      if (!loadedModel || !props.content?.showCorners || !rawEdges.length) return
+
+      const acute  = rawEdges.filter(e => e.type === 'acute')
+      const obtuse = rawEdges.filter(e => e.type === 'obtuse')
+
+      const makeSegments = (edges, color) => {
+        if (!edges.length) return
+        const pos = new Float32Array(edges.length * 6)
+        edges.forEach((e, i) => {
+          pos[i * 6 + 0] = e.v1.x; pos[i * 6 + 1] = e.v1.y; pos[i * 6 + 2] = e.v1.z
+          pos[i * 6 + 3] = e.v2.x; pos[i * 6 + 4] = e.v2.y; pos[i * 6 + 5] = e.v2.z
+        })
+        const geo   = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+        const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: new THREE.Color(color) }))
+        lines.renderOrder = 3
+        scene.add(lines)
+        cornerLines.push(lines)
+      }
+
+      makeSegments(acute,  props.content?.acuteCornerColor  || '#ff4444')
+      makeSegments(obtuse, props.content?.obtuseCornerColor || '#ffaa00')
+    }
+
     // ─── Annotation overlays ──────────────────────────────────────────────────
     const clearAnnotationOverlays = () => {
       annotationOverlays.forEach(a => removeOverlay(a.overlay))
@@ -1386,8 +1572,11 @@ export default {
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
       removeEdges()
-      facesData = []
-      holeMeshNames = new Set()
+      clearCornerLines()
+      facesData        = []
+      cornersData      = []
+      cornersRawEdges  = []
+      holeMeshNames    = new Set()
 
       try {
         const loader = new GLTFLoader()
@@ -1501,6 +1690,21 @@ export default {
           }
         }
         setFacesVar(allFaces)
+
+        // Detect and render sharp / non-90° corners
+        const cornerResult = detectSharpCorners(props.content?.cornerAngleTolerance ?? 10)
+        cornersData     = cornerResult.data
+        cornersRawEdges = cornerResult.rawEdges
+        setSharpCornersVar(cornersData)
+        buildCornerLines(cornersRawEdges)
+        emit('trigger-event', {
+          name:  'sharp-corners-detected',
+          event: {
+            corners:     cornersData,
+            acuteCount:  cornersData.filter(c => c.type === 'acute').length,
+            obtuseCount: cornersData.filter(c => c.type === 'obtuse').length,
+          },
+        })
 
         const holeCount = mergedCylinders.filter(c => c.isHole === true).length
         const bossCount = mergedCylinders.filter(c => c.isHole === false).length
@@ -1813,6 +2017,32 @@ export default {
       edgeLines.forEach(l => l.material.color.set(color || '#222222'))
     })
 
+    // Re-detect when tolerance changes; rebuild lines when toggle or colors change
+    watch(() => props.content?.cornerAngleTolerance, () => {
+      if (!libsReady.value || !loadedModel) return
+      const result = detectSharpCorners(props.content?.cornerAngleTolerance ?? 10)
+      cornersData     = result.data
+      cornersRawEdges = result.rawEdges
+      setSharpCornersVar(cornersData)
+      buildCornerLines(cornersRawEdges)
+      emit('trigger-event', {
+        name:  'sharp-corners-detected',
+        event: {
+          corners:     cornersData,
+          acuteCount:  cornersData.filter(c => c.type === 'acute').length,
+          obtuseCount: cornersData.filter(c => c.type === 'obtuse').length,
+        },
+      })
+    })
+
+    watch(() => props.content?.showCorners, () => {
+      if (libsReady.value && loadedModel) buildCornerLines(cornersRawEdges)
+    })
+
+    watch(() => [props.content?.acuteCornerColor, props.content?.obtuseCornerColor], () => {
+      if (libsReady.value && loadedModel) buildCornerLines(cornersRawEdges)
+    })
+
     watch(() => props.content?.showGrid, (show) => {
       if (!scene) return
       if (show && !gridHelper) {
@@ -1859,8 +2089,11 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
-      facesData = []
-      holeMeshNames = new Set()
+      clearCornerLines()
+      facesData       = []
+      cornersData     = []
+      cornersRawEdges = []
+      holeMeshNames   = new Set()
       removeEdges()
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
