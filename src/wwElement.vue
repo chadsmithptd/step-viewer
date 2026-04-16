@@ -214,6 +214,8 @@ export default {
     let resizeObserver = null
     let loadedModel    = null
     let gridHelper     = null
+    let ambientLight   = null
+    let keyLight       = null
     let facesData      = []   // unified face list for click enrichment
 
     let clickableMeshes    = []
@@ -1035,6 +1037,7 @@ export default {
       mesh.updateWorldMatrix(true, false)
       overlay.matrixAutoUpdate = false
       overlay.matrix.copy(mesh.matrixWorld)
+      overlay.renderOrder = 1
       scene.add(overlay)
       return overlay
     }
@@ -1266,11 +1269,15 @@ export default {
       controls.enableZoom         = true
 
       // Three-point lighting
-      scene.add(new THREE.AmbientLight(0xffffff, 0.65))
-      const key = new THREE.DirectionalLight(0xffffff, 0.85)
-      key.position.set(5, 10, 7)
-      key.castShadow = true
-      scene.add(key)
+      ambientLight = new THREE.AmbientLight(0xffffff, props.content?.ambientIntensity ?? 0.35)
+      scene.add(ambientLight)
+      keyLight = new THREE.DirectionalLight(0xffffff, 0.85)
+      keyLight.position.set(5, 10, 7)
+      keyLight.castShadow = true
+      keyLight.shadow.mapSize.width  = 2048
+      keyLight.shadow.mapSize.height = 2048
+      scene.add(keyLight)
+      scene.add(keyLight.target)
       const fill = new THREE.DirectionalLight(0xffffff, 0.3)
       fill.position.set(-5, -3, -5)
       scene.add(fill)
@@ -1359,7 +1366,14 @@ export default {
         scene.add(loadedModel)
 
         clickableMeshes = []
-        loadedModel.traverse(obj => { if (obj.isMesh) clickableMeshes.push(obj) })
+        const shadowsOn = props.content?.shadowsEnabled !== false
+        loadedModel.traverse(obj => {
+          if (!obj.isMesh) return
+          clickableMeshes.push(obj)
+          obj.castShadow    = shadowsOn
+          obj.receiveShadow = shadowsOn
+          obj.renderOrder   = 0
+        })
         loadedModel.updateMatrixWorld(true)
 
         storeOriginalMaterials()
@@ -1389,6 +1403,25 @@ export default {
 
         defaultCameraPos = camera.position.clone()
         defaultTarget    = center.clone()
+
+        // Reposition key light relative to model and fit shadow frustum
+        if (keyLight) {
+          keyLight.position.set(
+            center.x + maxDim * 1.5,
+            center.y + maxDim * 2,
+            center.z + maxDim * 1.2
+          )
+          keyLight.target.position.copy(center)
+          keyLight.target.updateMatrixWorld()
+          const s = maxDim * 1.2
+          keyLight.shadow.camera.near   = maxDim * 0.1
+          keyLight.shadow.camera.far    = maxDim * 8
+          keyLight.shadow.camera.left   = -s
+          keyLight.shadow.camera.right  =  s
+          keyLight.shadow.camera.top    =  s
+          keyLight.shadow.camera.bottom = -s
+          keyLight.shadow.camera.updateProjectionMatrix()
+        }
 
         if (gridHelper) { scene.remove(gridHelper); gridHelper.dispose(); gridHelper = null }
         if (props.content?.showGrid) {
@@ -1687,6 +1720,20 @@ export default {
       if (!loadedModel) return
       if (props.content?.overrideColor) applyColorOverride(props.content?.modelColor || '#cccccc')
       else applyModelOpacity(opacity ?? 1)
+    })
+
+    watch(() => props.content?.ambientIntensity, (val) => {
+      if (ambientLight) ambientLight.intensity = val ?? 0.35
+    })
+
+    watch(() => props.content?.shadowsEnabled, (enabled) => {
+      if (!loadedModel) return
+      const on = enabled !== false
+      loadedModel.traverse(obj => {
+        if (!obj.isMesh) return
+        obj.castShadow    = on
+        obj.receiveShadow = on
+      })
     })
 
     watch(() => props.content?.backgroundColor, (color) => {

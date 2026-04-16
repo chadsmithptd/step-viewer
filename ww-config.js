@@ -173,6 +173,35 @@ export default {
       /* wwEditor:end */
     },
 
+    ambientIntensity: {
+      label: { en: 'Ambient Light Intensity' },
+      type: 'Number',
+      section: 'style',
+      bindable: true,
+      defaultValue: 0.35,
+      options: { min: 0, max: 2, step: 0.05 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Lower values increase face-to-face contrast by letting the directional key light dominate.',
+      },
+      /* wwEditor:end */
+    },
+
+    shadowsEnabled: {
+      label: { en: 'Surface Shadows' },
+      type: 'OnOff',
+      section: 'style',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'When on, model faces cast and receive shadows from the key directional light.',
+      },
+      /* wwEditor:end */
+    },
+
     selectionColor: {
       label: { en: 'Selection Highlight Color' },
       type: 'Color',
