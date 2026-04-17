@@ -100,20 +100,29 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 const CDN = 'https://esm.sh/three@0.162.0'
 
 // Module-level cache so libs are fetched once per page load
-let THREE         = null
-let OrbitControls = null
-let GLTFLoader    = null
+let THREE                = null
+let TrackballControls    = null
+let GLTFLoader           = null
+let LineSegments2        = null
+let LineSegmentsGeometry = null
+let LineMaterial         = null
 
 const loadLibs = async () => {
   if (THREE) return
-  const [t, c, g] = await Promise.all([
+  const [t, tc, g, ls2, lsg, lm] = await Promise.all([
     import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0'),
-    import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/controls/OrbitControls'),
+    import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/controls/TrackballControls'),
     import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/loaders/GLTFLoader'),
+    import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/lines/LineSegments2'),
+    import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/lines/LineSegmentsGeometry'),
+    import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/lines/LineMaterial'),
   ])
-  THREE         = t
-  OrbitControls = c.OrbitControls
-  GLTFLoader    = g.GLTFLoader
+  THREE                = t
+  TrackballControls    = tc.TrackballControls
+  GLTFLoader           = g.GLTFLoader
+  LineSegments2        = ls2.LineSegments2
+  LineSegmentsGeometry = lsg.LineSegmentsGeometry
+  LineMaterial         = lm.LineMaterial
 }
 
 // ─── Document / window helpers (WeWeb-safe) ───────────────────────────────────
@@ -1500,7 +1509,12 @@ export default {
     }
 
     const clearCornerOverlays = () => {
-      cornerOverlays.forEach(o => removeOverlay(o))
+      cornerOverlays.forEach(o => {
+        if (!o || !scene) return
+        scene.remove(o)
+        o.geometry?.dispose()
+        o.material?.dispose()
+      })
       cornerOverlays = []
     }
 
@@ -1521,12 +1535,20 @@ export default {
         else obtusePos.push(...entry.seamPositions)
       }
 
+      const w = renderer.domElement.clientWidth  || 400
+      const h = renderer.domElement.clientHeight || 300
+
       const makeSeamLines = (positions, color) => {
         if (!positions.length) return null
-        const geo = new THREE.BufferGeometry()
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-        const mat = new THREE.LineBasicMaterial({ color: new THREE.Color(color) })
-        const lines = new THREE.LineSegments(geo, mat)
+        const geo = new LineSegmentsGeometry()
+        geo.setPositions(positions)
+        const mat = new LineMaterial({
+          color:      new THREE.Color(color),
+          linewidth:  3,
+          worldUnits: false,
+          resolution: new THREE.Vector2(w, h),
+        })
+        const lines = new LineSegments2(geo, mat)
         lines.renderOrder = 3
         scene.add(lines)
         return lines
@@ -1609,10 +1631,11 @@ export default {
       camera.position.set(5, 5, 5)
       camera.lookAt(0, 0, 0)
 
-      controls = new OrbitControls(camera, renderer.domElement)
-      controls.enableDamping      = false
-      controls.screenSpacePanning = true
-      controls.enableZoom         = true
+      controls = new TrackballControls(camera, renderer.domElement)
+      controls.rotateSpeed  = 2.5
+      controls.zoomSpeed    = 1.2
+      controls.panSpeed     = 0.8
+      controls.staticMoving = true
 
       // Three-point lighting
       ambientLight = new THREE.AmbientLight(0xffffff, props.content?.ambientIntensity ?? 0.35)
@@ -1674,6 +1697,9 @@ export default {
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
+      for (const o of cornerOverlays) {
+        if (o?.material?.resolution) o.material.resolution.set(w, h)
+      }
     }
 
     // ─── Model loading ────────────────────────────────────────────────────────
