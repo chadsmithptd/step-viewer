@@ -2354,7 +2354,7 @@ export default {
     align-items: center;
     gap: 0;
     z-index: 10;
-    background: #000000;
+    background: #0D0D0D;
     border-radius: 8px;
     padding: 4px;
     overflow: hidden;
