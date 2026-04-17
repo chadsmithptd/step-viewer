@@ -223,6 +223,8 @@ export default {
       : null
     const setSharpCornersVar = (val) => _wwCornersVar?.setValue?.(val)
 
+    const GIZMO_SIZE = 120  // CSS px — corner orientation cube
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -235,6 +237,9 @@ export default {
     let gridHelper     = null
     let ambientLight   = null
     let keyLight       = null
+    let gizmoScene     = null
+    let gizmoCamera    = null
+    let gizmoCube      = null
     let facesData      = []   // unified face list for click enrichment
     let holeMeshNames  = new Set()  // mesh names belonging to full holes (arcDeg ≥ 350)
     let edgeLines        = []   // LineSegments overlaying hard geometric edges
@@ -1544,7 +1549,7 @@ export default {
         geo.setPositions(positions)
         const mat = new LineMaterial({
           color:      new THREE.Color(color),
-          linewidth:  3,
+          linewidth:  6,
           worldUnits: false,
           resolution: new THREE.Vector2(w, h),
         })
@@ -1619,6 +1624,7 @@ export default {
       renderer.setPixelRatio(Math.min(getWin().devicePixelRatio, 2))
       renderer.setClearColor(0x000000, 0)
       renderer.shadowMap.enabled = true
+      renderer.autoClear = false
       renderer.shadowMap.type    = THREE.PCFSoftShadowMap
       renderer.toneMapping       = THREE.ACESFilmicToneMapping
       renderer.toneMappingExposure = 1.1
@@ -1666,7 +1672,58 @@ export default {
       resizeObserver = new ResizeObserver(onResize)
       resizeObserver.observe(rootRef.value)
 
+      initGizmo()
       animate()
+    }
+
+    // ─── Orientation gizmo (cube in top-right corner) ─────────────────────────
+    const initGizmo = () => {
+      gizmoScene  = new THREE.Scene()
+      gizmoCamera = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10)
+      gizmoCamera.position.set(0, 0, 5)
+      gizmoCamera.lookAt(0, 0, 0)
+
+      const makeFaceTex = (label, bg) => {
+        const sz  = 128
+        const cvs = getDoc().createElement('canvas')
+        cvs.width = cvs.height = sz
+        const ctx = cvs.getContext('2d')
+        ctx.fillStyle = bg
+        ctx.fillRect(0, 0, sz, sz)
+        // inner border
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)'
+        ctx.lineWidth   = 4
+        ctx.strokeRect(3, 3, sz - 6, sz - 6)
+        ctx.fillStyle   = '#ffffff'
+        ctx.font        = 'bold 28px Arial'
+        ctx.textAlign   = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(label, sz / 2, sz / 2)
+        return new THREE.CanvasTexture(cvs)
+      }
+
+      const faces = [
+        { label: 'RIGHT',  bg: '#c0392b' },
+        { label: 'LEFT',   bg: '#922b21' },
+        { label: 'TOP',    bg: '#1e8449' },
+        { label: 'BOTTOM', bg: '#196f3d' },
+        { label: 'FRONT',  bg: '#1a5276' },
+        { label: 'BACK',   bg: '#154360' },
+      ]
+
+      const mats = faces.map(f =>
+        new THREE.MeshBasicMaterial({ map: makeFaceTex(f.label, f.bg) })
+      )
+
+      gizmoCube = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), mats)
+      gizmoScene.add(gizmoCube)
+
+      // Edge lines for face boundary clarity
+      const edgeLines = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(2.02, 2.02, 2.02)),
+        new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.4, transparent: true })
+      )
+      gizmoCube.add(edgeLines)
     }
 
     // ─── Animation loop ───────────────────────────────────────────────────────
@@ -1685,7 +1742,23 @@ export default {
         controls.update()
       }
 
+      renderer.clear()
       renderer.render(scene, camera)
+
+      // Render orientation gizmo in top-right corner
+      if (gizmoScene && gizmoCamera && gizmoCube) {
+        const cw = renderer.domElement.clientWidth
+        const ch = renderer.domElement.clientHeight
+        renderer.setViewport(cw - GIZMO_SIZE, ch - GIZMO_SIZE, GIZMO_SIZE, GIZMO_SIZE)
+        renderer.setScissor(cw - GIZMO_SIZE, ch - GIZMO_SIZE, GIZMO_SIZE, GIZMO_SIZE)
+        renderer.setScissorTest(true)
+        renderer.clearDepth()
+        gizmoCube.quaternion.copy(camera.quaternion)
+        gizmoCube.quaternion.invert()
+        renderer.render(gizmoScene, gizmoCamera)
+        renderer.setScissorTest(false)
+        renderer.setViewport(0, 0, cw, ch)
+      }
     }
 
     // ─── Resize ───────────────────────────────────────────────────────────────
@@ -1884,6 +1957,46 @@ export default {
       }
     }
 
+    // ─── Gizmo click helpers ──────────────────────────────────────────────────
+    const isInGizmo = (event) => {
+      if (!gizmoScene) return false
+      const rect = canvasRef.value.getBoundingClientRect()
+      const x    = event.clientX - rect.left
+      const y    = event.clientY - rect.top
+      return x > rect.width - GIZMO_SIZE && y < GIZMO_SIZE
+    }
+
+    const handleGizmoClick = (event) => {
+      const rect = canvasRef.value.getBoundingClientRect()
+      const x    = event.clientX - rect.left
+      const y    = event.clientY - rect.top
+      const gx   = ((x - (rect.width - GIZMO_SIZE)) / GIZMO_SIZE) * 2 - 1
+      const gy   = -(y / GIZMO_SIZE) * 2 + 1
+
+      raycaster.setFromCamera(new THREE.Vector2(gx, gy), gizmoCamera)
+      const hits = raycaster.intersectObject(gizmoCube)
+      if (!hits.length) return
+
+      // BoxGeometry: 2 tris per face → faceIndex/2 gives face number
+      // Order: 0=+X(right) 1=-X(left) 2=+Y(top) 3=-Y(bottom) 4=+Z(front) 5=-Z(back)
+      const faceIdx = Math.floor(hits[0].faceIndex / 2)
+      const dirs    = [
+        new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0),
+        new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0),
+        new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1),
+      ]
+      const dist   = camera.position.distanceTo(controls.target)
+      const endPos = controls.target.clone().addScaledVector(dirs[faceIdx], dist)
+
+      snapAnim = {
+        startPos:    camera.position.clone(),
+        endPos,
+        startTarget: controls.target.clone(),
+        endTarget:   controls.target.clone(),
+        progress:    0,
+      }
+    }
+
     // ─── Canvas click → raycasting ────────────────────────────────────────────
     const onPointerDown = (event) => {
       pointerDownPos = { x: event.clientX, y: event.clientY }
@@ -1896,6 +2009,8 @@ export default {
         pointerDownPos = null
         if (Math.sqrt(dx * dx + dy * dy) > 5) return
       }
+
+      if (isInGizmo(event)) { handleGizmoClick(event); return }
 
       if (!scene || !camera || !loadedModel) return
 
@@ -2240,6 +2355,11 @@ export default {
       removeEdges()
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
+      if (gizmoCube) {
+        gizmoCube.geometry.dispose()
+        const mats = Array.isArray(gizmoCube.material) ? gizmoCube.material : [gizmoCube.material]
+        mats.forEach(m => { m.map?.dispose(); m.dispose() })
+      }
       if (loadedModel) disposeObject(loadedModel)
       if (renderer) { renderer.dispose(); renderer.forceContextLoss() }
     })
