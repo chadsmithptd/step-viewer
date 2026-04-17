@@ -1334,7 +1334,7 @@ export default {
           if (nCnt === 0 || bvSet.size === 0) continue
           const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1
 
-          // World-space boundary vertex positions (sample up to 300 per group)
+          // World-space boundary vertex positions (sample up to 300 per group for adjacency detection)
           const allBV = [...bvSet]
           const step  = Math.max(1, Math.floor(allBV.length / 300))
           const bvPos = []
@@ -1344,6 +1344,25 @@ export default {
             bvPos.push({ x: _p.x, y: _p.y, z: _p.z })
           }
 
+          // All boundary vertex positions — used for accurate seam segment collection
+          const bvPosAll = allBV.map(vi => {
+            _p.set(posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)).applyMatrix4(wm)
+            return { x: _p.x, y: _p.y, z: _p.z }
+          })
+
+          // Boundary edge pairs (world-space), capped to avoid excess memory on dense meshes
+          const bvEdgePairs = []
+          let edgeCap = 0
+          for (const [k, cnt] of edgeCount) {
+            if (cnt !== 1 || edgeCap++ > 2000) continue
+            const [a, b] = k.split('_').map(Number)
+            _p.set(posAttr.getX(a), posAttr.getY(a), posAttr.getZ(a)).applyMatrix4(wm)
+            const pA = { x: _p.x, y: _p.y, z: _p.z }
+            _p.set(posAttr.getX(b), posAttr.getY(b), posAttr.getZ(b)).applyMatrix4(wm)
+            const pB = { x: _p.x, y: _p.y, z: _p.z }
+            bvEdgePairs.push([pA, pB])
+          }
+
           faceGroups.push({
             id:         faceGroups.length,
             meshName:   mesh.name || '',
@@ -1351,6 +1370,8 @@ export default {
             matIdx:     group.materialIndex ?? 0,
             normal:     { x: nx / nl, y: ny / nl, z: nz / nl },
             bvPos,
+            bvPosAll,
+            bvEdgePairs,
           })
         }
       }
@@ -1441,6 +1462,40 @@ export default {
         }
       }
 
+      // ── Step 5: collect seam segments for each flagged pair ───────────────────
+      // For each pair, find boundary edges from both faces where both endpoints
+      // are within epsilon of the opposing face's boundary — those edges form the seam.
+      const isCellNearSet = (pos, cellSet) => {
+        const ix = Math.floor(pos.x / CELL), iy = Math.floor(pos.y / CELL), iz = Math.floor(pos.z / CELL)
+        for (let dx = -1; dx <= 1; dx++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dz = -1; dz <= 1; dz++)
+              if (cellSet.has(`${ix+dx}_${iy+dy}_${iz+dz}`)) return true
+        return false
+      }
+
+      for (const [pairId, entry] of pairMap) {
+        const [fg1Id, fg2Id] = pairId.split('_').map(Number)
+        const fg1 = faceGroups[fg1Id]
+        const fg2 = faceGroups[fg2Id]
+        if (!fg1?.bvEdgePairs || !fg2?.bvEdgePairs) continue
+
+        const fg1CellSet = new Set(fg1.bvPosAll.map(p => hk(p.x, p.y, p.z)))
+        const fg2CellSet = new Set(fg2.bvPosAll.map(p => hk(p.x, p.y, p.z)))
+
+        const seamPositions = []
+        for (const [pA, pB] of fg1.bvEdgePairs) {
+          if (isCellNearSet(pA, fg2CellSet) && isCellNearSet(pB, fg2CellSet))
+            seamPositions.push(pA.x, pA.y, pA.z, pB.x, pB.y, pB.z)
+        }
+        for (const [pA, pB] of fg2.bvEdgePairs) {
+          if (isCellNearSet(pA, fg1CellSet) && isCellNearSet(pB, fg1CellSet))
+            seamPositions.push(pA.x, pA.y, pA.z, pB.x, pB.y, pB.z)
+        }
+
+        entry.seamPositions = seamPositions
+      }
+
       return { data: [...pairMap.values()], rawEdges }
     }
 
@@ -1449,38 +1504,38 @@ export default {
       cornerOverlays = []
     }
 
-    // Highlights both faces of each flagged pair using the proven overlay infrastructure
-    // (same path as selections/annotations — MeshBasicMaterial, renderOrder 2, polygon offset).
+    // Renders the shared seam edge between each flagged face-pair using LineSegments.
     const buildCornerOverlays = (data) => {
       clearCornerOverlays()
       if (!loadedModel || !props.content?.showCorners || !data.length) return
 
-      // Helper: find the first faceIndex belonging to a specific materialIndex group
-      const getFaceIdx = (mesh, matIdx) => {
-        if (!mesh?.geometry?.groups?.length) return 0
-        const grp = mesh.geometry.groups.find(g => (g.materialIndex ?? 0) === matIdx)
-        return grp ? Math.floor(grp.start / 3) : 0
-      }
+      const acuteColor  = props.content?.acuteCornerColor  || '#ff4444'
+      const obtuseColor = props.content?.obtuseCornerColor || '#ffaa00'
 
-      // Deduplicate by (meshName, matIdx) so each face is overlaid once
-      const overlaid = new Set()
+      const acutePos  = []
+      const obtusePos = []
 
       for (const entry of data) {
-        const color = entry.type === 'acute'
-          ? (props.content?.acuteCornerColor  || '#ff4444')
-          : (props.content?.obtuseCornerColor || '#ffaa00')
-
-        const add = (mName, matIdx) => {
-          const key = `${mName}_${matIdx}`
-          if (overlaid.has(key)) return
-          overlaid.add(key)
-          const m = clickableMeshes.find(cm => cm.name === mName)
-          if (m) cornerOverlays.push(makeOverlayMesh(m, getFaceIdx(m, matIdx), color, -1))
-        }
-
-        add(entry.meshName,  entry.g1)
-        add(entry.mesh2Name, entry.g2)
+        if (!entry.seamPositions?.length) continue
+        if (entry.type === 'acute') acutePos.push(...entry.seamPositions)
+        else obtusePos.push(...entry.seamPositions)
       }
+
+      const makeSeamLines = (positions, color) => {
+        if (!positions.length) return null
+        const geo = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+        const mat = new THREE.LineBasicMaterial({ color: new THREE.Color(color) })
+        const lines = new THREE.LineSegments(geo, mat)
+        lines.renderOrder = 3
+        scene.add(lines)
+        return lines
+      }
+
+      const acuteLines  = makeSeamLines(acutePos,  acuteColor)
+      const obtuseLines = makeSeamLines(obtusePos, obtuseColor)
+      if (acuteLines)  cornerOverlays.push(acuteLines)
+      if (obtuseLines) cornerOverlays.push(obtuseLines)
     }
 
     // ─── Annotation overlays ──────────────────────────────────────────────────
