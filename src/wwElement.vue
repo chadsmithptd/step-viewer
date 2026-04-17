@@ -1891,6 +1891,7 @@ export default {
       }
 
       if (!scene || !camera || !loadedModel) return
+      if (props.content?.enableSelection === false) return
 
       const canvas = canvasRef.value
       const rect   = canvas.getBoundingClientRect()

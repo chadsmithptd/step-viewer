@@ -245,6 +245,20 @@ export default {
       /* wwEditor:end */
     },
 
+    enableSelection: {
+      label: { en: 'Enable Surface Selection' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'When off, clicking on model surfaces does nothing — no face selection or highlight.',
+      },
+      /* wwEditor:end */
+    },
+
     annotationColor: {
       label: { en: 'Annotation Highlight Color' },
       type: 'Color',
