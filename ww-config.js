@@ -273,6 +273,38 @@ export default {
       /* wwEditor:end */
     },
 
+    modelOffsetLeft: {
+      label: { en: 'Model Offset Left (px)' },
+      type: 'Number',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 0,
+      options: { min: -2000, max: 2000, step: 1 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Shifts the model right by this many pixels, adding visual space on the left.',
+      },
+      propertyHelp: 'Use when a left-side panel overlaps the viewer — positive values push the model toward the center.',
+      /* wwEditor:end */
+    },
+
+    modelOffsetRight: {
+      label: { en: 'Model Offset Right (px)' },
+      type: 'Number',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 0,
+      options: { min: -2000, max: 2000, step: 1 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Shifts the model left by this many pixels, adding visual space on the right.',
+      },
+      propertyHelp: 'Use when a right-side panel overlaps the viewer — positive values push the model toward the center.',
+      /* wwEditor:end */
+    },
+
     showGrid: {
       label: { en: 'Show Grid' },
       type: 'OnOff',

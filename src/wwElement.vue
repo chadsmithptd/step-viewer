@@ -1681,6 +1681,22 @@ export default {
       renderer.render(scene, camera)
     }
 
+    // ─── View offset (left/right model centering) ─────────────────────────────
+    const applyViewOffset = () => {
+      if (!camera || !renderer) return
+      const W   = renderer.domElement.width
+      const H   = renderer.domElement.height
+      const ox  = (props.content?.modelOffsetLeft ?? 0) - (props.content?.modelOffsetRight ?? 0)
+      if (ox !== 0) {
+        const abs    = Math.abs(ox)
+        const startX = ox < 0 ? 2 * abs : 0
+        camera.setViewOffset(W + 2 * abs, H, startX, 0, W, H)
+      } else {
+        camera.clearViewOffset()
+      }
+      camera.updateProjectionMatrix()
+    }
+
     // ─── Resize ───────────────────────────────────────────────────────────────
     const onResize = () => {
       if (!renderer || !rootRef.value) return
@@ -1690,6 +1706,7 @@ export default {
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
+      applyViewOffset()
       for (const o of cornerOverlays) {
         if (o?.material?.resolution) o.material.resolution.set(w, h)
       }
@@ -1772,6 +1789,7 @@ export default {
 
         defaultCameraPos = camera.position.clone()
         defaultTarget    = center.clone()
+        applyViewOffset()
 
         // Reposition key light relative to model and fit shadow frustum
         if (keyLight) {
@@ -2189,6 +2207,10 @@ export default {
       } else if (!show && gridHelper) {
         scene.remove(gridHelper); gridHelper.dispose(); gridHelper = null
       }
+    })
+
+    watch(() => [props.content?.modelOffsetLeft, props.content?.modelOffsetRight], () => {
+      applyViewOffset()
     })
 
     // Rebuild annotation overlays whenever the resolved annotation array changes
