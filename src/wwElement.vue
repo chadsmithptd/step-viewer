@@ -83,6 +83,24 @@
     <div v-if="selectionLabel" class="selection-badge">
       {{ selectionLabel }}
     </div>
+
+    <!-- GD&T / PMI badge layer — positioned imperatively in the animate loop -->
+    <div
+      v-if="showAnnotationBadges"
+      ref="badgeContainerRef"
+      class="badge-layer"
+      aria-hidden="true"
+    >
+      <div
+        v-for="(ann, i) in processedAnnotations"
+        :key="i"
+        class="annotation-badge"
+        :class="`badge-type-${ann.type || 'note'}`"
+      >
+        <span v-if="ann.datumRef" class="badge-datum">{{ ann.datumRef }}</span>
+        <span class="badge-text">{{ ann.value || ann.label }}</span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -133,9 +151,10 @@ export default {
   emits: ['trigger-event'],
   setup(props, { emit }) {
     // ─── DOM refs ────────────────────────────────────────────────────────────
-    const rootRef      = ref(null)
-    const canvasRef    = ref(null)
-    const fileInputRef = ref(null)
+    const rootRef         = ref(null)
+    const canvasRef       = ref(null)
+    const fileInputRef    = ref(null)
+    const badgeContainerRef = ref(null)
 
     // ─── UI state ────────────────────────────────────────────────────────────
     const isLoading      = ref(false)
@@ -216,6 +235,48 @@ export default {
       : null
     const setSharpCornersVar = (val) => _wwCornersVar?.setValue?.(val)
 
+    // Phase 1 — feature model
+    const _wwFeatureModelVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'featureModel',
+          type:         'object',
+          defaultValue: null,
+        })
+      : null
+    const setFeatureModelVar = (val) => _wwFeatureModelVar?.setValue?.(val)
+
+    // Phase 4 — rule evaluation outputs
+    const _wwRuleViolationsVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'ruleViolations',
+          type:         'array',
+          defaultValue: [],
+        })
+      : null
+    const setRuleViolationsVar = (val) => _wwRuleViolationsVar?.setValue?.(val)
+
+    const _wwDesignScoreVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'designScore',
+          type:         'number',
+          defaultValue: 100,
+        })
+      : null
+    const setDesignScoreVar = (val) => _wwDesignScoreVar?.setValue?.(val)
+
+    const _wwViolationCountVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'violationCount',
+          type:         'number',
+          defaultValue: 0,
+        })
+      : null
+    const setViolationCountVar = (val) => _wwViolationCountVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -252,6 +313,11 @@ export default {
     let defaultTarget        = null
     let focusedHoleOverlays  = []
 
+    // MBD state — plain vars, no Vue reactivity overhead
+    let currentFeatureModel = null
+    let currentRuleResult   = null
+    let featureOverlayMap   = new Map()
+
     // ─── Computed ─────────────────────────────────────────────────────────────
     const rootStyle = computed(() => ({
       width:      '100%',
@@ -274,6 +340,11 @@ export default {
         }
         return { ...item, point, normal }
       })
+    })
+
+    const showAnnotationBadges = computed(() => {
+      const mode = props.content?.annotationDisplayMode
+      return (mode === 'badge' || mode === 'both') && processedAnnotations.value.length > 0
     })
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -1679,6 +1750,7 @@ export default {
       }
 
       renderer.render(scene, camera)
+      if (showAnnotationBadges.value) updateBadgePositions()
     }
 
     // ─── View offset (left/right model centering) ─────────────────────────────
@@ -1730,9 +1802,12 @@ export default {
       clearFocusedHoleOverlay()
       removeEdges()
       clearCornerOverlays()
-      facesData    = []
-      cornersData  = []
-      holeMeshNames = new Set()
+      clearFeatureOverlays()
+      facesData          = []
+      cornersData        = []
+      holeMeshNames      = new Set()
+      currentFeatureModel = null
+      currentRuleResult   = null
 
       try {
         const loader = new GLTFLoader()
@@ -1876,6 +1951,33 @@ export default {
         // Body of Revolution test — voxel IoU against a 180°-rotated copy
         const bor = analyzeBodyOfRevolution(mergedCylinders)
         setBodyOfRevolutionVar(bor)
+
+        // ── Phase 1: Build structured feature model ───────────────────────────
+        currentFeatureModel = buildFeatureModel(mergedCylinders, allFaces, cornerResult, bor)
+        setFeatureModelVar(currentFeatureModel)
+        emit('trigger-event', {
+          name:  'feature-model-built',
+          event: { ...currentFeatureModel.summary },
+        })
+
+        // ── Phase 4: Evaluate design rules against the feature model ──────────
+        currentRuleResult = evaluateDesignRules(currentFeatureModel, props.content?.designRules)
+        setRuleViolationsVar(currentRuleResult.violations)
+        setDesignScoreVar(currentRuleResult.score)
+        setViolationCountVar(currentRuleResult.violationCount)
+        emit('trigger-event', {
+          name:  'rules-evaluated',
+          event: {
+            passed:         currentRuleResult.passed,
+            violations:     currentRuleResult.violations,
+            warnings:       currentRuleResult.warnings,
+            score:          currentRuleResult.score,
+            violationCount: currentRuleResult.violationCount,
+          },
+        })
+
+        // ── Phase 2: Build feature overlays (violation-aware) ─────────────────
+        buildFeatureOverlays()
 
         emit('trigger-event', {
           name: 'model-loaded',
@@ -2107,6 +2209,282 @@ export default {
       }
     }
 
+    // ─── Phase 1: Feature Model ───────────────────────────────────────────────
+    // Organises flat facesData output into a typed MBD feature hierarchy.
+    // Called once per model load with the already-computed analysis results —
+    // no additional geometry passes required.
+    const buildFeatureModel = (mergedCylinders, allFaces, cornerResult, borResult) => {
+      const holes = mergedCylinders
+        .filter(c => c.isHole === true)
+        .map((c, i) => ({
+          id:        `hole-${i}`,
+          diameter:  c.diameter,
+          depth:     c.depth,
+          axis:      c.axis,
+          center:    c.center,
+          arcDeg:    c.arcDeg,
+          meshName:  c.meshName,
+          meshNames: c.meshNames || [c.meshName].filter(Boolean),
+          tolerance: null,
+          datum:     null,
+        }))
+
+      const bosses = mergedCylinders
+        .filter(c => c.isHole === false && c.isConcave === false)
+        .map((c, i) => ({
+          id:        `boss-${i}`,
+          diameter:  c.diameter,
+          depth:     c.depth,
+          axis:      c.axis,
+          center:    c.center,
+          arcDeg:    c.arcDeg,
+          meshName:  c.meshName,
+          meshNames: c.meshNames || [c.meshName].filter(Boolean),
+        }))
+
+      const planes = allFaces
+        .filter(f => f.faceType === 'planar')
+        .map((f, i) => ({
+          id:            `plane-${i}`,
+          normal:        f.axis,
+          shape:         f.shape,
+          diameter:      f.diameter,
+          meshName:      f.meshName,
+          materialIndex: f.materialIndex,
+        }))
+
+      const cones = allFaces
+        .filter(f => f.faceType === 'conical')
+        .map((f, i) => ({
+          id:            `cone-${i}`,
+          halfAngle:     f.halfAngle,
+          axis:          f.axis,
+          meshName:      f.meshName,
+          materialIndex: f.materialIndex,
+        }))
+
+      const fillets = allFaces
+        .filter(f => f.faceType === 'toroidal')
+        .map((f, i) => ({
+          id:            `fillet-${i}`,
+          meshName:      f.meshName,
+          materialIndex: f.materialIndex,
+        }))
+
+      const acuteCorners  = cornerResult?.data?.filter(c => c.type === 'acute')  || []
+      const obtuseCorners = cornerResult?.data?.filter(c => c.type === 'obtuse') || []
+
+      return {
+        holes,
+        bosses,
+        planes,
+        cones,
+        fillets,
+        corners:  { acute: acuteCorners, obtuse: obtuseCorners },
+        symmetry: borResult ? {
+          isBodyOfRevolution: borResult.isBodyOfRevolution,
+          axis:               borResult.axis,
+          overlapPercent:     borResult.overlapPercent,
+          axisSource:         borResult.axisSource,
+        } : null,
+        summary: {
+          holeCount:          holes.length,
+          bossCount:          bosses.length,
+          planeCount:         planes.length,
+          coneCount:          cones.length,
+          filletCount:        fillets.length,
+          acuteCornerCount:   acuteCorners.length,
+          obtuseCornerCount:  obtuseCorners.length,
+          isBodyOfRevolution: borResult?.isBodyOfRevolution ?? false,
+        },
+      }
+    }
+
+    // ─── Phase 4: Design Rule Check Engine ───────────────────────────────────
+    // Pure function — no Three.js, no Vue reactivity. Returns a result object
+    // that can be stored and re-emitted whenever rules or the model change.
+    const RULE_GETTERS = {
+      hole:   {
+        diameter:         f => f.diameter,
+        depth:            f => f.depth,
+        'depth/diameter': f => (f.diameter ? f.depth / f.diameter : null),
+        arcDeg:           f => f.arcDeg,
+      },
+      boss:   {
+        diameter:         f => f.diameter,
+        depth:            f => f.depth,
+        'depth/diameter': f => (f.diameter ? f.depth / f.diameter : null),
+      },
+      plane:  { count: (_, list) => list.length },
+      cone:   { halfAngle: f => f.halfAngle, count: (_, list) => list.length },
+      fillet: { count: (_, list) => list.length },
+      corner: { angle: f => f.angle, type: f => f.type },
+      global: {
+        holeCount:          (_, __, m) => m.summary.holeCount,
+        bossCount:          (_, __, m) => m.summary.bossCount,
+        planeCount:         (_, __, m) => m.summary.planeCount,
+        coneCount:          (_, __, m) => m.summary.coneCount,
+        filletCount:        (_, __, m) => m.summary.filletCount,
+        acuteCornerCount:   (_, __, m) => m.summary.acuteCornerCount,
+        obtuseCornerCount:  (_, __, m) => m.summary.obtuseCornerCount,
+        isBodyOfRevolution: (_, __, m) => m.summary.isBodyOfRevolution,
+      },
+    }
+
+    const RULE_OPS = {
+      '>=': (a, b) => typeof a === 'number' && a >= b,
+      '<=': (a, b) => typeof a === 'number' && a <= b,
+      '>':  (a, b) => typeof a === 'number' && a > b,
+      '<':  (a, b) => typeof a === 'number' && a < b,
+      '==': (a, b) => a == b,
+      '!=': (a, b) => a != b,
+      'is': (a, b) => a === b,
+    }
+
+    const evaluateDesignRules = (featureModel, rules) => {
+      const empty = { passed: true, violations: [], warnings: [], score: 100, violationCount: 0 }
+      if (!featureModel || !Array.isArray(rules) || !rules.length) return empty
+
+      const violations = []
+      const warnings   = []
+      let rulesPassed  = 0
+      let rulesTotal   = 0
+
+      for (const rule of rules) {
+        const { id, label, featureType, property, operator, threshold, severity = 'error' } = rule
+        if (!featureType || !property || !operator) continue
+        rulesTotal++
+
+        const list = ({
+          hole:   featureModel.holes   || [],
+          boss:   featureModel.bosses  || [],
+          plane:  featureModel.planes  || [],
+          cone:   featureModel.cones   || [],
+          fillet: featureModel.fillets || [],
+          corner: [...(featureModel.corners?.acute || []), ...(featureModel.corners?.obtuse || [])],
+          global: [null],
+        })[featureType] || []
+
+        const getter = RULE_GETTERS[featureType]?.[property]
+        if (!getter) { rulesPassed++; continue }
+
+        const op       = RULE_OPS[operator]
+        let rulePassed = true
+
+        for (const feature of list) {
+          const actual = getter(feature, list, featureModel)
+          if (actual === null || actual === undefined) continue
+          if (!op || !op(actual, threshold)) {
+            const entry = {
+              ruleId:      id || `${featureType}.${property}`,
+              label:       label || `${featureType} ${property} ${operator} ${threshold}`,
+              featureType,
+              featureId:   feature?.id ?? null,
+              actual,
+              threshold,
+              severity,
+            }
+            if (severity === 'warning') warnings.push(entry)
+            else violations.push(entry)
+            rulePassed = false
+          }
+        }
+
+        if (rulePassed) rulesPassed++
+      }
+
+      const score = rulesTotal > 0 ? Math.round((rulesPassed / rulesTotal) * 100) : 100
+      return { passed: violations.length === 0, violations, warnings, score, violationCount: violations.length }
+    }
+
+    // ─── Phase 2: Feature Overlays ────────────────────────────────────────────
+    const clearFeatureOverlays = () => {
+      for (const overlays of featureOverlayMap.values()) overlays.forEach(o => removeOverlay(o))
+      featureOverlayMap = new Map()
+    }
+
+    // Resolve mesh + face index from feature identity, then delegate to makeOverlayMesh
+    const makeFeatureOverlay = (meshName, materialIndex, color) => {
+      const mesh = clickableMeshes.find(m => m.name === meshName)
+      if (!mesh) return null
+      const geo = mesh.geometry
+      let faceIndex = 0
+      if (geo.groups?.length > 0) {
+        const g = geo.groups.find(gr => (gr.materialIndex ?? 0) === materialIndex)
+        if (g) faceIndex = Math.floor(g.start / 3)
+      }
+      return makeOverlayMesh(mesh, faceIndex, color, -1.5)
+    }
+
+    const buildFeatureOverlays = () => {
+      clearFeatureOverlays()
+      if (!loadedModel || !currentFeatureModel) return
+
+      const featureColorsDef = props.content?.featureColors || []
+      const activeTypes      = props.content?.activeFeatureTypes
+      const hasActiveFilter  = Array.isArray(activeTypes) && activeTypes.length > 0
+      const violationColor   = props.content?.violationHighlightColor || '#ff3b30'
+
+      const colorMap = Object.fromEntries(
+        featureColorsDef.map(fc => [fc.featureType, { color: fc.color || '#888', visible: fc.visible !== false }])
+      )
+      const violatedIds = new Set(
+        (currentRuleResult?.violations || []).map(v => v.featureId).filter(Boolean)
+      )
+
+      const groups = [
+        { type: 'hole',   features: currentFeatureModel.holes   || [] },
+        { type: 'boss',   features: currentFeatureModel.bosses  || [] },
+        { type: 'plane',  features: currentFeatureModel.planes  || [] },
+        { type: 'cone',   features: currentFeatureModel.cones   || [] },
+        { type: 'fillet', features: currentFeatureModel.fillets || [] },
+      ]
+
+      for (const { type, features } of groups) {
+        const fc = colorMap[type]
+        if (!fc?.visible) continue
+        if (hasActiveFilter && !activeTypes.includes(type)) continue
+
+        for (const feature of features) {
+          const color    = violatedIds.has(feature.id) ? violationColor : fc.color
+          const overlays = []
+
+          if (feature.meshNames?.length) {
+            for (const name of feature.meshNames) {
+              const o = makeFeatureOverlay(name, 0, color)
+              if (o) overlays.push(o)
+            }
+          } else if (feature.meshName) {
+            const o = makeFeatureOverlay(feature.meshName, feature.materialIndex ?? 0, color)
+            if (o) overlays.push(o)
+          }
+
+          if (overlays.length) featureOverlayMap.set(feature.id, overlays)
+        }
+      }
+    }
+
+    // ─── Phase 3: Badge Position Update (called per-frame in animate) ─────────
+    // Directly mutates badge element styles to avoid Vue reactivity cost at 60fps.
+    const updateBadgePositions = () => {
+      const container = badgeContainerRef.value
+      if (!container || !camera || !renderer) return
+      const w   = renderer.domElement.clientWidth
+      const h   = renderer.domElement.clientHeight
+      const pts = processedAnnotations.value
+      const els = container.children
+      for (let i = 0; i < els.length && i < pts.length; i++) {
+        const pt = pts[i]?.point
+        if (!pt) continue
+        const v = new THREE.Vector3(pt.x, pt.y, pt.z).project(camera)
+        const x = (v.x *  0.5 + 0.5) * w
+        const y = (v.y * -0.5 + 0.5) * h
+        const visible = v.z < 1 && x >= 0 && x <= w && y >= 0 && y <= h
+        els[i].style.transform = `translate(calc(${x}px - 50%), calc(${y}px - 50%))`
+        els[i].style.display   = visible ? '' : 'none'
+      }
+    }
+
     // ─── Watchers ─────────────────────────────────────────────────────────────
     watch(() => props.content?.glbData, (val) => { if (val && libsReady.value) loadModel(val) })
 
@@ -2218,6 +2596,31 @@ export default {
       if (libsReady.value && loadedModel) buildAnnotationOverlays()
     }, { deep: true })
 
+    // Phase 2: Rebuild feature overlays when colors / active filter change
+    watch(() => [props.content?.featureColors, props.content?.activeFeatureTypes, props.content?.violationHighlightColor], () => {
+      if (libsReady.value && loadedModel) buildFeatureOverlays()
+    }, { deep: true })
+
+    // Phase 4: Re-evaluate rules when rule definitions change; then refresh overlays
+    watch(() => props.content?.designRules, (rules) => {
+      if (!currentFeatureModel) return
+      currentRuleResult = evaluateDesignRules(currentFeatureModel, rules)
+      setRuleViolationsVar(currentRuleResult.violations)
+      setDesignScoreVar(currentRuleResult.score)
+      setViolationCountVar(currentRuleResult.violationCount)
+      emit('trigger-event', {
+        name:  'rules-evaluated',
+        event: {
+          passed:         currentRuleResult.passed,
+          violations:     currentRuleResult.violations,
+          warnings:       currentRuleResult.warnings,
+          score:          currentRuleResult.score,
+          violationCount: currentRuleResult.violationCount,
+        },
+      })
+      if (libsReady.value && loadedModel) buildFeatureOverlays()
+    }, { deep: true })
+
     // ─── Lifecycle ────────────────────────────────────────────────────────────
     onMounted(async () => {
       isLoading.value  = true
@@ -2250,9 +2653,12 @@ export default {
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
       clearCornerOverlays()
-      facesData    = []
-      cornersData  = []
-      holeMeshNames = new Set()
+      clearFeatureOverlays()
+      facesData           = []
+      cornersData         = []
+      holeMeshNames       = new Set()
+      currentFeatureModel = null
+      currentRuleResult   = null
       removeEdges()
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
@@ -2262,12 +2668,14 @@ export default {
 
     return {
       // DOM
-      rootRef, canvasRef, fileInputRef,
+      rootRef, canvasRef, fileInputRef, badgeContainerRef,
       content: props.content,
       // UI
       isLoading, loadingMsg, errorMsg, selectionLabel, libsReady,
       modelLoaded, isDragging,
       rootStyle,
+      // Phase 3: badge layer
+      showAnnotationBadges, processedAnnotations,
       // Handlers
       onPointerDown, onCanvasClick,
       resetCamera, rotateLeft, rotateRight,
@@ -2420,6 +2828,56 @@ export default {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  // ── GD&T / PMI badge layer ─────────────────────────────────────────────────
+  .badge-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .annotation-badge {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    white-space: nowrap;
+    pointer-events: none;
+    backdrop-filter: blur(3px);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+
+    &.badge-type-dimension { background: rgba(26, 115, 232, 0.9); color: #fff; }
+    &.badge-type-tolerance { background: rgba(234, 67, 53, 0.9);  color: #fff; }
+    &.badge-type-datum     { background: rgba(0, 0, 0, 0.85);     color: #fff; border: 1px solid rgba(255,255,255,0.5); }
+    &.badge-type-note      { background: rgba(30, 30, 30, 0.85);  color: #fff; }
+  }
+
+  .badge-datum {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid currentColor;
+    border-radius: 50%;
+    font-size: 9px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .badge-text {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 </style>

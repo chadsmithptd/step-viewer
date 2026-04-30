@@ -379,6 +379,130 @@ export default {
       },
       /* wwEditor:end */
     },
+
+    // ── Phase 2: Parametric Feature Visualization ──────────────────────────────
+    featureColors: {
+      label: { en: 'Feature Type Colors' },
+      type: 'Array',
+      section: 'settings',
+      bindable: true,
+      defaultValue: [
+        { featureType: 'hole',   label: 'Holes',   color: '#1a73e8', visible: false },
+        { featureType: 'boss',   label: 'Bosses',  color: '#34a853', visible: false },
+        { featureType: 'plane',  label: 'Planes',  color: '#fbbc04', visible: false },
+        { featureType: 'cone',   label: 'Cones',   color: '#9c27b0', visible: false },
+        { featureType: 'fillet', label: 'Fillets', color: '#ea4335', visible: false },
+      ],
+      options: {
+        expandable: true,
+        getItemLabel(item) { return item.label || item.featureType || 'Feature' },
+        item: {
+          type: 'Object',
+          defaultValue: { featureType: 'hole', label: 'Holes', color: '#1a73e8', visible: false },
+          options: {
+            item: {
+              featureType: { label: { en: 'Feature Type' }, type: 'Text' },
+              label:       { label: { en: 'Label' },        type: 'Text' },
+              color:       { label: { en: 'Color' },        type: 'Color' },
+              visible:     { label: { en: 'Visible' },      type: 'OnOff' },
+            },
+          },
+        },
+      },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Array of { featureType, label, color, visible } objects. featureType: hole | boss | plane | cone | fillet.',
+      },
+      propertyHelp: 'Control per-feature-type highlight color and visibility. Toggle visible to overlay color on all detected features of that type.',
+      /* wwEditor:end */
+    },
+
+    activeFeatureTypes: {
+      label: { en: 'Active Feature Types' },
+      type: 'Array',
+      section: 'settings',
+      bindable: true,
+      defaultValue: [],
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Array of feature type strings to show: hole | boss | plane | cone | fillet. Empty = all visible types shown.',
+      },
+      propertyHelp: 'Bind a dynamic list to filter which feature types are highlighted. Leave empty to show all visible types.',
+      /* wwEditor:end */
+    },
+
+    violationHighlightColor: {
+      label: { en: 'Violation Highlight Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#ff3b30',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Color applied to feature overlays that fail a design rule.',
+      },
+      /* wwEditor:end */
+    },
+
+    // ── Phase 3: GD&T / PMI Annotation Display ────────────────────────────────
+    annotationDisplayMode: {
+      label: { en: 'Annotation Display Mode' },
+      type: 'TextSelect',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 'highlight',
+      options: {
+        options: [
+          { value: 'highlight', label: 'Face Highlight Only' },
+          { value: 'badge',     label: 'Badge Labels Only' },
+          { value: 'both',      label: 'Highlight + Badge' },
+        ],
+      },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'highlight | badge | both — controls how annotations are rendered.',
+      },
+      /* wwEditor:end */
+    },
+
+    // ── Phase 4: Design Rule Check ─────────────────────────────────────────────
+    designRules: {
+      label: { en: 'Design Rules' },
+      type: 'Array',
+      section: 'settings',
+      bindable: true,
+      defaultValue: [],
+      options: {
+        expandable: true,
+        getItemLabel(item) { return item.label || item.id || `${item.featureType}.${item.property} ${item.operator} ${item.threshold}` },
+        item: {
+          type: 'Object',
+          defaultValue: { id: '', label: '', featureType: 'hole', property: 'diameter', operator: '>=', threshold: 3, severity: 'error' },
+          options: {
+            item: {
+              id:          { label: { en: 'ID' },           type: 'Text' },
+              label:       { label: { en: 'Label' },         type: 'Text' },
+              featureType: { label: { en: 'Feature Type' },  type: 'Text' },
+              property:    { label: { en: 'Property' },      type: 'Text' },
+              operator:    { label: { en: 'Operator' },      type: 'Text' },
+              threshold:   { label: { en: 'Threshold' },     type: 'Number' },
+              severity:    { label: { en: 'Severity' },      type: 'Text' },
+            },
+          },
+        },
+      },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Array of rule objects: { id, label, featureType, property, operator, threshold, severity }. featureType: hole | boss | plane | cone | fillet | corner | global. operator: >= | <= | > | < | == | !=. severity: error | warning.',
+      },
+      propertyHelp: 'Define manufacturing constraints. Violated features are highlighted and exposed via the ruleViolations variable.',
+      /* wwEditor:end */
+    },
   },
 
   triggerEvents: [
@@ -452,10 +576,34 @@ export default {
       event: {
         meshCount:   0,
         vertexCount: 0,
-        surfaceArea: 0,    // total surface area in model units²
-        volume:      0,    // total volume in model units³ (requires closed solid)
+        surfaceArea: 0,
+        volume:      0,
         boundingBox: { min: {}, max: {}, width: 0, height: 0, depth: 0 },
-        // faces list available via the 'faces' internal variable (may be large — not inlined here)
+      },
+    },
+    {
+      name: 'feature-model-built',
+      label: { en: 'On Feature Model Built' },
+      event: {
+        holeCount:          0,
+        bossCount:          0,
+        planeCount:         0,
+        coneCount:          0,
+        filletCount:        0,
+        acuteCornerCount:   0,
+        obtuseCornerCount:  0,
+        isBodyOfRevolution: false,
+      },
+    },
+    {
+      name: 'rules-evaluated',
+      label: { en: 'On Rules Evaluated' },
+      event: {
+        passed:         true,
+        violations:     [],   // [{ ruleId, label, featureType, featureId, actual, threshold, severity }]
+        warnings:       [],
+        score:          100,  // 0–100 percentage of rules passing
+        violationCount: 0,
       },
     },
   ],
