@@ -1992,7 +1992,7 @@ export default {
         setBodyOfRevolutionVar(bor)
 
         // ── Phase 1: Build structured feature model ───────────────────────────
-        currentFeatureModel = buildFeatureModel(mergedCylinders, allFaces, cornerResult, bor)
+        currentFeatureModel = buildFeatureModel(mergedCylinders, allFaces, cornerResult, bor, partProps.boundingBox)
         setFeatureModelVar(currentFeatureModel)
         emit('trigger-event', {
           name:  'feature-model-built',
@@ -2273,7 +2273,7 @@ export default {
     // Organises flat facesData output into a typed MBD feature hierarchy.
     // Called once per model load with the already-computed analysis results —
     // no additional geometry passes required.
-    const buildFeatureModel = (mergedCylinders, allFaces, cornerResult, borResult) => {
+    const buildFeatureModel = (mergedCylinders, allFaces, cornerResult, borResult, boundingBox = null) => {
       const holes = mergedCylinders
         .filter(c => c.isHole === true)
         .map((c, i) => ({
@@ -2356,6 +2356,10 @@ export default {
           acuteCornerCount:   acuteCorners.length,
           obtuseCornerCount:  obtuseCorners.length,
           isBodyOfRevolution: borResult?.isBodyOfRevolution ?? false,
+          bbWidth:            boundingBox?.width  ?? null,
+          bbHeight:           boundingBox?.height ?? null,
+          bbDepth:            boundingBox?.depth  ?? null,
+          bbMaxDimension:     boundingBox ? Math.max(boundingBox.width, boundingBox.height, boundingBox.depth) : null,
         },
       }
     }
@@ -2388,6 +2392,10 @@ export default {
         acuteCornerCount:   (_, __, m) => m.summary.acuteCornerCount,
         obtuseCornerCount:  (_, __, m) => m.summary.obtuseCornerCount,
         isBodyOfRevolution: (_, __, m) => m.summary.isBodyOfRevolution,
+        'boundingBox.width':        (_, __, m) => m.summary.bbWidth,
+        'boundingBox.height':       (_, __, m) => m.summary.bbHeight,
+        'boundingBox.depth':        (_, __, m) => m.summary.bbDepth,
+        'boundingBox.maxDimension': (_, __, m) => m.summary.bbMaxDimension,
       },
     }
 
