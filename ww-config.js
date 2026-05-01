@@ -49,6 +49,21 @@ export default {
       /* wwEditor:end */
     },
 
+    focusedAnnotation: {
+      label: { en: 'Focused Annotation' },
+      type: 'Object',
+      section: 'settings',
+      bindable: true,
+      defaultValue: null,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'object',
+        tooltip: 'Bind an annotation object from the On Annotations Clicked event. The matching annotation becomes active (shown in Active Annotation Color). Set to null to deactivate.',
+      },
+      propertyHelp: 'Use this with On Annotations Clicked to programmatically activate an annotation. Bind to a variable you set in your workflow — e.g. when a user picks from a list of annotations on a shared face.',
+      /* wwEditor:end */
+    },
+
     // ── Annotations ──────────────────────────────────────────────────────────
     annotations: {
       label: { en: 'Annotations' },
@@ -612,6 +627,16 @@ export default {
       label: { en: 'On Annotation Clicked' },
       event: {
         annotation: {},
+        point:  { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 0 },
+      },
+    },
+    {
+      name: 'annotations-clicked',
+      label: { en: 'On Annotations Clicked' },
+      event: {
+        annotations: [],  // all annotations sharing the clicked face
+        count:        0,  // total number — > 1 means a shared face
         point:  { x: 0, y: 0, z: 0 },
         normal: { x: 0, y: 0, z: 0 },
       },

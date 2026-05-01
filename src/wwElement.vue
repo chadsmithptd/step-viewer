@@ -2090,23 +2090,38 @@ export default {
         } : { isHole: false, isConcave: null, surfaceType: null, center: null, halfAngle: null, merged: false, mergedCount: null, meshNames: null }
 
         // ── Annotation check ─────────────────────────────────────────────────
-        const matchedAnnotation = annotationOverlays.find(
-          a => a.mesh === mesh && a.groupIndex === groupIdx
-        )
-        if (matchedAnnotation) {
-          setActiveAnnotation(matchedAnnotation.annotationId)
-        } else {
-          clearActiveAnnotation()
-        }
-        if (matchedAnnotation) {
+        // Collect all overlays for this face, then deduplicate by annotationId
+        // so each annotation is represented once even if it spans multiple faces.
+        const faceOverlays   = annotationOverlays.filter(a => a.mesh === mesh && a.groupIndex === groupIdx)
+        const seenIds        = new Set()
+        const uniqueMatched  = faceOverlays.filter(a => seenIds.has(a.annotationId) ? false : (seenIds.add(a.annotationId), true))
+
+        if (uniqueMatched.length > 0) {
+          // Activate the first annotation; focusedAnnotation binding can override this
+          setActiveAnnotation(uniqueMatched[0].annotationId)
+
+          // Backward-compat: fire single-annotation event for the first match
           emit('trigger-event', {
             name:  'annotation-clicked',
             event: {
-              annotation: matchedAnnotation.annotation,
-              point:      matchedAnnotation.annotation.point,
-              normal:     matchedAnnotation.annotation.normal,
+              annotation: uniqueMatched[0].annotation,
+              point:      uniqueMatched[0].annotation.point,
+              normal:     uniqueMatched[0].annotation.normal,
             },
           })
+
+          // Always fire the full-array event — count > 1 signals a shared face
+          emit('trigger-event', {
+            name:  'annotations-clicked',
+            event: {
+              annotations: uniqueMatched.map(a => a.annotation),
+              count:        uniqueMatched.length,
+              point:        uniqueMatched[0].annotation.point,
+              normal:       uniqueMatched[0].annotation.normal,
+            },
+          })
+        } else {
+          clearActiveAnnotation()
         }
 
         // ── Selection logic ───────────────────────────────────────────────────
@@ -2535,6 +2550,18 @@ export default {
 
     watch(() => props.content?.focusedHole, (hole) => {
       if (hole && libsReady.value && loadedModel) focusOnHole(hole)
+    }, { deep: true })
+
+    watch(() => props.content?.focusedAnnotation, (ann) => {
+      if (!ann) { clearActiveAnnotation(); return }
+      // Match by _id (set during processedAnnotations), then by id, then by object reference
+      const match = annotationOverlays.find(a =>
+        (ann._id !== undefined && a.annotationId === ann._id) ||
+        (ann.id  !== undefined && a.annotationId === ann.id)  ||
+        a.annotation === ann
+      )
+      if (match) setActiveAnnotation(match.annotationId)
+      else clearActiveAnnotation()
     }, { deep: true })
 
     watch(() => props.content?.centerOfRotation, (pos) => {
