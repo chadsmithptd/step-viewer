@@ -333,7 +333,7 @@ export default {
         type: 'string',
         tooltip: 'Color applied to all faces of the annotation the user most recently clicked',
       },
-      propertyHelp: 'When a user clicks an annotated face, that annotation (and all its associated faces) switches from Annotation Highlight Color to this color.',
+      propertyHelp: 'Applied to all faces of the currently active annotation. Clicking an annotated face activates it; clicking any non-annotated face or empty space deactivates it and reverts to Annotation Highlight Color.',
       /* wwEditor:end */
     },
 

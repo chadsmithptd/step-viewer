@@ -1691,23 +1691,23 @@ export default {
       }
     }
 
+    // Reverts the current active annotation back to the resting color.
+    const clearActiveAnnotation = () => {
+      if (activeAnnotationId === null) return
+      const annColor = props.content?.annotationColor || '#ff6b35'
+      annotationOverlays
+        .filter(a => a.annotationId === activeAnnotationId)
+        .forEach(a => a.overlay?.material?.color?.set(annColor))
+      activeAnnotationId = null
+    }
+
     // Sets the active annotation, recoloring overlays accordingly.
     const setActiveAnnotation = (id) => {
-      const annColor    = props.content?.annotationColor    || '#ff6b35'
       const activeColor = props.content?.activeAnnotationColor || '#ffffff'
-
-      // Revert previously active overlays
-      if (activeAnnotationId !== null) {
-        annotationOverlays
-          .filter(a => a.annotationId === activeAnnotationId)
-          .forEach(a => a.overlay?.material?.color?.set(annColor))
-      }
-
-      // Apply active color to new annotation's overlays (all its faces)
+      clearActiveAnnotation()
       annotationOverlays
         .filter(a => a.annotationId === id)
         .forEach(a => a.overlay?.material?.color?.set(activeColor))
-
       activeAnnotationId = id
     }
 
@@ -2095,6 +2095,10 @@ export default {
         )
         if (matchedAnnotation) {
           setActiveAnnotation(matchedAnnotation.annotationId)
+        } else {
+          clearActiveAnnotation()
+        }
+        if (matchedAnnotation) {
           emit('trigger-event', {
             name:  'annotation-clicked',
             event: {
@@ -2144,7 +2148,8 @@ export default {
         emitMultiSelection()
 
       } else {
-        // Clicked empty space — clear all selections
+        // Clicked empty space — clear all selections and deselect active annotation
+        clearActiveAnnotation()
         clearAllSelections()
         emitMultiSelection()
       }
