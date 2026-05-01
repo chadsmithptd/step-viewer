@@ -98,7 +98,8 @@
         :class="`badge-type-${ann.type || 'note'}`"
       >
         <span v-if="ann.datumRef" class="badge-datum">{{ ann.datumRef }}</span>
-        <span class="badge-text">{{ ann.value || ann.label }}</span>
+        <span v-if="showBadgeLabel" class="badge-text">{{ ann.value || ann.label }}</span>
+        <wwLayout path="badgeDropzoneContent" direction="row" class="badge-dropzone" />
       </div>
     </div>
   </div>
@@ -298,8 +299,9 @@ export default {
     let clickableMeshes    = []
     // Multi-selection: [{mesh, groupIndex, overlay, faceIndex, point, normal, meshName, objectName, userData}]
     let selections         = []
-    // Annotation overlays: [{mesh, groupIndex, overlay, annotation}]
-    let annotationOverlays = []
+    // Annotation overlays: [{mesh, groupIndex, overlay, annotation, annotationId}]
+    let annotationOverlays  = []
+    let activeAnnotationId  = null
 
     let modelRadius           = 5
     let snapAnim              = null
@@ -327,18 +329,22 @@ export default {
       background: props.content?.backgroundColor || 'transparent',
     }))
 
+    const showBadgeLabel = computed(() => props.content?.showBadgeLabel !== false)
+
     // Resolved annotation array — handles formula field mapping
     const processedAnnotations = computed(() => {
       const items = props.content?.annotations
       if (!Array.isArray(items) || !items.length) return []
-      return items.map(item => {
+      return items.map((item, i) => {
         let point  = item.point
         let normal = item.normal
+        let faces  = item.faces
         if (resolveMappingFormula) {
           point  = resolveMappingFormula(props.content?.annotationPointFormula,  item) ?? item.point
           normal = resolveMappingFormula(props.content?.annotationNormalFormula, item) ?? item.normal
+          faces  = resolveMappingFormula(props.content?.annotationFacesFormula,  item) ?? item.faces
         }
-        return { ...item, point, normal }
+        return { ...item, point, normal, faces, _id: item.id ?? `ann-${i}` }
       })
     })
 
@@ -1627,7 +1633,25 @@ export default {
     // ─── Annotation overlays ──────────────────────────────────────────────────
     const clearAnnotationOverlays = () => {
       annotationOverlays.forEach(a => removeOverlay(a.overlay))
-      annotationOverlays = []
+      annotationOverlays  = []
+      activeAnnotationId  = null
+    }
+
+    // Returns the first raycaster hit for a {point,normal} pair, or null.
+    const _raycastFace = (pt, nm) => {
+      if (!pt) return null
+      const epsilon = (modelRadius * 0.0001) || 0.001
+      const nmVec   = new THREE.Vector3(nm?.x ?? 0, nm?.y ?? 0, nm?.z ?? 0)
+      if (nmVec.lengthSq() < 0.0001) nmVec.set(0, 1, 0)
+      nmVec.normalize()
+      const ptVec = new THREE.Vector3(pt.x ?? 0, pt.y ?? 0, pt.z ?? 0)
+      raycaster.set(ptVec.clone().addScaledVector(nmVec, epsilon), nmVec.clone().negate())
+      let hits = raycaster.intersectObjects(clickableMeshes, true)
+      if (!hits.length) {
+        raycaster.set(ptVec.clone().addScaledVector(nmVec, -epsilon), nmVec)
+        hits = raycaster.intersectObjects(clickableMeshes, true)
+      }
+      return hits.length ? hits[0] : null
     }
 
     const buildAnnotationOverlays = () => {
@@ -1637,39 +1661,54 @@ export default {
       const annotations = processedAnnotations.value
       if (!annotations.length) return
 
-      const epsilon = (modelRadius * 0.0001) || 0.001
-      const color   = props.content?.annotationColor || '#ff6b35'
+      const color = props.content?.annotationColor || '#ff6b35'
 
       for (const annotation of annotations) {
-        const pt = annotation.point
-        const nm = annotation.normal
-        if (!pt) continue
+        const annId = annotation._id
 
-        const nmVec = new THREE.Vector3(nm?.x ?? 0, nm?.y ?? 0, nm?.z ?? 0)
-        if (nmVec.lengthSq() < 0.0001) nmVec.set(0, 1, 0)
-        nmVec.normalize()
-
-        const ptVec = new THREE.Vector3(pt.x ?? 0, pt.y ?? 0, pt.z ?? 0)
-
-        // Primary: shoot from slightly above surface (normal side) inward
-        raycaster.set(ptVec.clone().addScaledVector(nmVec, epsilon), nmVec.clone().negate())
-        let hits = raycaster.intersectObjects(clickableMeshes, true)
-
-        // Fallback: shoot from slightly inside outward
-        if (!hits.length) {
-          raycaster.set(ptVec.clone().addScaledVector(nmVec, -epsilon), nmVec)
-          hits = raycaster.intersectObjects(clickableMeshes, true)
-        }
-
-        if (hits.length > 0) {
-          const hit      = hits[0]
-          const mesh     = hit.object
-          const fi       = hit.faceIndex ?? 0
+        // Primary face
+        const primaryHit = _raycastFace(annotation.point, annotation.normal)
+        if (primaryHit) {
+          const mesh     = primaryHit.object
+          const fi       = primaryHit.faceIndex ?? 0
           const groupIdx = getGroupIndex(mesh, fi)
           const overlay  = makeOverlayMesh(mesh, fi, color, -1)
-          annotationOverlays.push({ mesh, groupIndex: groupIdx, overlay, annotation })
+          annotationOverlays.push({ mesh, groupIndex: groupIdx, overlay, annotation, annotationId: annId })
+        }
+
+        // Extra faces — array of {point, normal} on the same annotation
+        const extraFaces = Array.isArray(annotation.faces) ? annotation.faces : []
+        for (const face of extraFaces) {
+          const hit = _raycastFace(face.point ?? face, face.normal ?? annotation.normal)
+          if (hit) {
+            const mesh     = hit.object
+            const fi       = hit.faceIndex ?? 0
+            const groupIdx = getGroupIndex(mesh, fi)
+            const overlay  = makeOverlayMesh(mesh, fi, color, -1)
+            annotationOverlays.push({ mesh, groupIndex: groupIdx, overlay, annotation, annotationId: annId })
+          }
         }
       }
+    }
+
+    // Sets the active annotation, recoloring overlays accordingly.
+    const setActiveAnnotation = (id) => {
+      const annColor    = props.content?.annotationColor    || '#ff6b35'
+      const activeColor = props.content?.activeAnnotationColor || '#ffffff'
+
+      // Revert previously active overlays
+      if (activeAnnotationId !== null) {
+        annotationOverlays
+          .filter(a => a.annotationId === activeAnnotationId)
+          .forEach(a => a.overlay?.material?.color?.set(annColor))
+      }
+
+      // Apply active color to new annotation's overlays (all its faces)
+      annotationOverlays
+        .filter(a => a.annotationId === id)
+        .forEach(a => a.overlay?.material?.color?.set(activeColor))
+
+      activeAnnotationId = id
     }
 
     // ─── Main Three.js init ───────────────────────────────────────────────────
@@ -2055,6 +2094,7 @@ export default {
           a => a.mesh === mesh && a.groupIndex === groupIdx
         )
         if (matchedAnnotation) {
+          setActiveAnnotation(matchedAnnotation.annotationId)
           emit('trigger-event', {
             name:  'annotation-clicked',
             event: {
@@ -2541,7 +2581,16 @@ export default {
     })
 
     watch(() => props.content?.annotationColor, (color) => {
-      annotationOverlays.forEach(a => a.overlay?.material?.color?.set(color || '#ff6b35'))
+      annotationOverlays
+        .filter(a => a.annotationId !== activeAnnotationId)
+        .forEach(a => a.overlay?.material?.color?.set(color || '#ff6b35'))
+    })
+
+    watch(() => props.content?.activeAnnotationColor, (color) => {
+      if (activeAnnotationId === null) return
+      annotationOverlays
+        .filter(a => a.annotationId === activeAnnotationId)
+        .forEach(a => a.overlay?.material?.color?.set(color || '#ffffff'))
     })
 
     watch(() => props.content?.showEdges, () => {
@@ -2675,7 +2724,7 @@ export default {
       modelLoaded, isDragging,
       rootStyle,
       // Phase 3: badge layer
-      showAnnotationBadges, processedAnnotations,
+      showAnnotationBadges, processedAnnotations, showBadgeLabel,
       // Handlers
       onPointerDown, onCanvasClick,
       resetCamera, rotateLeft, rotateRight,
@@ -2878,6 +2927,15 @@ export default {
     max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .badge-dropzone {
+    display: contents;
+    pointer-events: auto;
+
+    &:empty {
+      display: none;
+    }
   }
 }
 </style>

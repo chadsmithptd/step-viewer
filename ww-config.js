@@ -73,6 +73,7 @@ export default {
               point:  { label: { en: 'Point (x, y, z)' },  type: 'Object' },
               normal: { label: { en: 'Normal (x, y, z)' }, type: 'Object' },
               label:  { label: { en: 'Label' },             type: 'Text'   },
+              faces:  { label: { en: 'Extra Faces (array of {point,normal})' }, type: 'Array' },
             },
           },
         },
@@ -112,6 +113,54 @@ export default {
       defaultValue: { type: 'f', code: "context.mapping?.['normal']" },
       hidden: (content, sidepanelContent, boundProps) =>
         !Array.isArray(content.annotations) || !content.annotations?.length || !boundProps.annotations,
+    },
+
+    annotationFacesFormula: {
+      label: { en: 'Extra Faces Field' },
+      type: 'Formula',
+      section: 'settings',
+      options: content => ({
+        template: Array.isArray(content.annotations) && content.annotations.length > 0
+          ? content.annotations[0]
+          : null,
+      }),
+      defaultValue: { type: 'f', code: "context.mapping?.['faces']" },
+      hidden: (content, sidepanelContent, boundProps) =>
+        !Array.isArray(content.annotations) || !content.annotations?.length || !boundProps.annotations,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Array of {point,normal} objects — each entry pins an additional face overlay to this annotation',
+      },
+      propertyHelp: 'Map to a field on your annotation records that contains an array of extra face points/normals. All faces share the same annotation color and active color.',
+      /* wwEditor:end */
+    },
+
+    // ── Badge dropzone ─────────────────────────────────────────────────────────
+    badgeDropzoneContent: {
+      hidden: true,
+      defaultValue: [],
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Drop WeWeb elements here to customize the annotation badge content',
+      },
+      /* wwEditor:end */
+    },
+
+    showBadgeLabel: {
+      label: { en: 'Show Badge Label Text' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      hidden: content => content?.annotationDisplayMode === 'highlight',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Show or hide the default label text inside each annotation badge. Disable when using the badge dropzone for fully custom content.',
+      },
+      /* wwEditor:end */
     },
 
     // ── Style ─────────────────────────────────────────────────────────────────
@@ -270,6 +319,21 @@ export default {
         type: 'string',
         tooltip: 'Color applied to faces that have an annotation pinned to them',
       },
+      /* wwEditor:end */
+    },
+
+    activeAnnotationColor: {
+      label: { en: 'Active Annotation Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#ffffff',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Color applied to all faces of the annotation the user most recently clicked',
+      },
+      propertyHelp: 'When a user clicks an annotated face, that annotation (and all its associated faces) switches from Annotation Highlight Color to this color.',
       /* wwEditor:end */
     },
 
