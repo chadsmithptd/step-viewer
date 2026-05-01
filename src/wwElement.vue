@@ -258,6 +258,16 @@ export default {
       : null
     const setRuleViolationsVar = (val) => _wwRuleViolationsVar?.setValue?.(val)
 
+    const _wwRuleWarningsVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'ruleWarnings',
+          type:         'array',
+          defaultValue: [],
+        })
+      : null
+    const setRuleWarningsVar = (val) => _wwRuleWarningsVar?.setValue?.(val)
+
     const _wwDesignScoreVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
       ? wwLib.wwVariable.useComponentVariable({
           uid:          props.uid,
@@ -2002,6 +2012,7 @@ export default {
         // ── Phase 4: Evaluate design rules against the feature model ──────────
         currentRuleResult = evaluateDesignRules(currentFeatureModel, props.content?.designRules)
         setRuleViolationsVar(currentRuleResult.violations)
+        setRuleWarningsVar(currentRuleResult.warnings)
         setDesignScoreVar(currentRuleResult.score)
         setViolationCountVar(currentRuleResult.violationCount)
         emit('trigger-event', {
@@ -2331,8 +2342,8 @@ export default {
           materialIndex: f.materialIndex,
         }))
 
-      const acuteCorners  = cornerResult?.data?.filter(c => c.type === 'acute')  || []
-      const obtuseCorners = cornerResult?.data?.filter(c => c.type === 'obtuse') || []
+      const acuteCorners  = (cornerResult?.data?.filter(c => c.type === 'acute')  || []).map((c, i) => ({ ...c, id: `corner-acute-${i}` }))
+      const obtuseCorners = (cornerResult?.data?.filter(c => c.type === 'obtuse') || []).map((c, i) => ({ ...c, id: `corner-obtuse-${i}` }))
 
       return {
         holes,
@@ -2379,9 +2390,9 @@ export default {
         depth:            f => f.depth,
         'depth/diameter': f => (f.diameter ? f.depth / f.diameter : null),
       },
-      plane:  { count: (_, list) => list.length },
-      cone:   { halfAngle: f => f.halfAngle, count: (_, list) => list.length },
-      fillet: { count: (_, list) => list.length },
+      plane:  { count: Object.assign((_, list) => list.length, { listLevel: true }) },
+      cone:   { halfAngle: f => f.halfAngle, count: Object.assign((_, list) => list.length, { listLevel: true }) },
+      fillet: { count: Object.assign((_, list) => list.length, { listLevel: true }) },
       corner: { angle: f => f.angle, type: f => f.type },
       global: {
         holeCount:          (_, __, m) => m.summary.holeCount,
@@ -2436,10 +2447,12 @@ export default {
         const getter = RULE_GETTERS[featureType]?.[property]
         if (!getter) { rulesPassed++; continue }
 
-        const op       = RULE_OPS[operator]
-        let rulePassed = true
+        const op        = RULE_OPS[operator]
+        let rulePassed  = true
+        // List-level getters (e.g. count) produce one result for the whole list, not per feature
+        const evalList  = getter.listLevel ? [null] : list
 
-        for (const feature of list) {
+        for (const feature of evalList) {
           const actual = getter(feature, list, featureModel)
           if (actual === null || actual === undefined) continue
           if (!op || !op(actual, threshold)) {
@@ -2447,7 +2460,9 @@ export default {
               ruleId:      id || `${featureType}.${property}`,
               label:       label || `${featureType} ${property} ${operator} ${threshold}`,
               featureType,
-              featureId:   feature?.id ?? null,
+              featureId:   feature?.id   ?? null,
+              meshName:    feature?.meshName  ?? null,
+              meshNames:   feature?.meshNames ?? null,
               actual,
               threshold,
               severity,
@@ -2509,12 +2524,15 @@ export default {
       ]
 
       for (const { type, features } of groups) {
-        const fc = colorMap[type]
-        if (!fc?.visible) continue
-        if (hasActiveFilter && !activeTypes.includes(type)) continue
+        const fc          = colorMap[type]
+        const typeVisible = fc?.visible && (!hasActiveFilter || activeTypes.includes(type))
 
         for (const feature of features) {
-          const color    = violatedIds.has(feature.id) ? violationColor : fc.color
+          const isViolated = violatedIds.has(feature.id)
+          // Violations always render; non-violations only render when the type is visible
+          if (!isViolated && !typeVisible) continue
+
+          const color    = isViolated ? violationColor : (fc?.color || '#888888')
           const overlays = []
 
           if (feature.meshNames?.length) {
@@ -2695,6 +2713,7 @@ export default {
       if (!currentFeatureModel) return
       currentRuleResult = evaluateDesignRules(currentFeatureModel, rules)
       setRuleViolationsVar(currentRuleResult.violations)
+      setRuleWarningsVar(currentRuleResult.warnings)
       setDesignScoreVar(currentRuleResult.score)
       setViolationCountVar(currentRuleResult.violationCount)
       emit('trigger-event', {
