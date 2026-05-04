@@ -2889,7 +2889,7 @@ export default {
   .controls-panel {
     position: absolute;
     top: 50%;
-    right: 12px;
+    left: 12px;
     transform: translateY(-50%);
     display: flex;
     flex-direction: column;
