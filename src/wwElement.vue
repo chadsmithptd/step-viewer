@@ -1728,7 +1728,7 @@ export default {
       const h = rootRef.value?.clientHeight || 300
 
       renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
-      renderer.setSize(w, h)
+      renderer.setSize(w, h, false)
       renderer.setPixelRatio(Math.min(getWin().devicePixelRatio, 2))
       renderer.setClearColor(0x000000, 0)
       renderer.shadowMap.enabled = true
@@ -1826,7 +1826,7 @@ export default {
       if (!w || !h) return
       camera.aspect = w / h
       camera.updateProjectionMatrix()
-      renderer.setSize(w, h)
+      renderer.setSize(w, h, false)
       applyViewOffset()
       for (const o of cornerOverlays) {
         if (o?.material?.resolution) o.material.resolution.set(w, h)
@@ -2804,6 +2804,9 @@ export default {
 
   .viewer-canvas {
     display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
     height: 100%;
     cursor: grab;
