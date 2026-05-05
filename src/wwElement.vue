@@ -77,6 +77,17 @@
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
       </button>
+      <button class="ctrl-btn" :class="{ 'ctrl-btn--active': toleranceMode }" title="Tolerance Mode" @click="toggleToleranceMode">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="4" x2="3" y2="20"/>
+          <line x1="21" y1="4" x2="21" y2="20"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="8" x2="9" y2="8"/>
+          <line x1="15" y1="8" x2="21" y2="8"/>
+          <line x1="3" y1="16" x2="9" y2="16"/>
+          <line x1="15" y1="16" x2="21" y2="16"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Selection badge -->
@@ -100,6 +111,41 @@
         <span v-if="ann.datumRef" class="badge-datum">{{ ann.datumRef }}</span>
         <span v-if="showBadgeLabel" class="badge-text">{{ ann.value || ann.label }}</span>
         <wwLayout path="badgeDropzoneContent" direction="row" class="badge-dropzone" />
+      </div>
+    </div>
+
+    <!-- Tolerance input panel -->
+    <div v-if="showToleranceInput" class="tolerance-input-panel" :style="toleranceInputStyle">
+      <div class="tol-panel-header">
+        <span class="tol-nominal">{{ tolerancePendingNominal.toFixed(3) }}</span>
+        <span class="tol-label-text">Nominal distance</span>
+      </div>
+      <div class="tol-fields">
+        <label class="tol-field">
+          <span class="tol-sign tol-plus">+</span>
+          <input type="number" v-model.number="tolerancePendingPlus" min="0" step="0.001" class="tol-input" />
+        </label>
+        <label class="tol-field">
+          <span class="tol-sign tol-minus">−</span>
+          <input type="number" v-model.number="tolerancePendingMinus" min="0" step="0.001" class="tol-input" />
+        </label>
+      </div>
+      <div class="tol-actions">
+        <button class="tol-btn-cancel" @click="cancelTolerance">Cancel</button>
+        <button class="tol-btn-confirm" @click="confirmTolerance">Add</button>
+      </div>
+    </div>
+
+    <!-- Tolerance label layer -->
+    <div ref="toleranceLabelContainerRef" class="tolerance-label-layer" aria-hidden="true">
+      <div
+        v-for="entry in toleranceEntriesRef"
+        :key="entry.id"
+        class="tolerance-label"
+      >
+        <span class="tol-lbl-nominal">{{ entry.nominal.toFixed(3) }}</span>
+        <span class="tol-lbl-tol">+{{ entry.plus.toFixed(3) }} / −{{ entry.minus.toFixed(3) }}</span>
+        <button class="tol-lbl-remove" @click="removeToleranceEntry(entry.id)">×</button>
       </div>
     </div>
   </div>
@@ -156,6 +202,7 @@ export default {
     const canvasRef       = ref(null)
     const fileInputRef    = ref(null)
     const badgeContainerRef = ref(null)
+    const toleranceLabelContainerRef = ref(null)
 
     // ─── UI state ────────────────────────────────────────────────────────────
     const isLoading      = ref(false)
@@ -165,6 +212,14 @@ export default {
     const libsReady      = ref(false)
     const modelLoaded    = ref(false)
     const isDragging     = ref(false)
+
+    const toleranceMode            = ref(false)
+    const showToleranceInput       = ref(false)
+    const tolerancePendingNominal  = ref(0)
+    const tolerancePendingPlus     = ref(0)
+    const tolerancePendingMinus    = ref(0)
+    const toleranceInputStyle      = ref({})
+    const toleranceEntriesRef      = ref([])
 
     /* wwEditor:start */
     const isEditing = computed(() => props.wwEditorState?.isEditing)
@@ -288,6 +343,13 @@ export default {
       : null
     const setViolationCountVar = (val) => _wwViolationCountVar?.setValue?.(val)
 
+    const _wwToleranceVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({ uid: props.uid, name: 'toleranceEntries', type: 'array', defaultValue: [] })
+      : null
+    const updateToleranceVar = () => {
+      _wwToleranceVar?.setValue?.(toleranceEntriesRef.value)
+    }
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -324,6 +386,12 @@ export default {
     let defaultCameraPos     = null
     let defaultTarget        = null
     let focusedHoleOverlays  = []
+
+    let tolerancePendingA        = null
+    let tolerancePendingB        = null
+    let tolerancePendingOverlayA = null
+    let tolerancePendingOverlayB = null
+    let toleranceVisuals         = []
 
     // MBD state — plain vars, no Vue reactivity overhead
     let currentFeatureModel = null
@@ -540,6 +608,141 @@ export default {
       }
 
       return { faceType: 'unknown', diameter: null, depth: null, axis: null }
+    }
+
+    const getFaceCentroid = (mesh, faceIndex) => {
+      const geo = mesh.geometry
+      const pos = geo.attributes.position
+      if (!pos) return new THREE.Vector3()
+      let idxStart = 0
+      let idxCount = geo.index ? geo.index.count : pos.count
+      if (geo.groups?.length > 0) {
+        const triOffset = faceIndex * 3
+        const group = geo.groups.find(g => triOffset >= g.start && triOffset < g.start + g.count)
+        if (group) { idxStart = group.start; idxCount = group.count }
+      }
+      const sum = new THREE.Vector3()
+      let count = 0
+      const v = new THREE.Vector3()
+      if (geo.index) {
+        for (let i = idxStart; i < idxStart + idxCount; i++) {
+          v.fromBufferAttribute(pos, geo.index.array[i]); sum.add(v); count++
+        }
+      } else {
+        for (let i = idxStart; i < idxStart + idxCount; i++) {
+          v.fromBufferAttribute(pos, i); sum.add(v); count++
+        }
+      }
+      if (count > 0) sum.divideScalar(count)
+      mesh.updateWorldMatrix(true, false)
+      sum.applyMatrix4(mesh.matrixWorld)
+      return sum
+    }
+
+    const buildToleranceLine = (cA, cB) => {
+      const geo = new THREE.BufferGeometry().setFromPoints([cA.clone(), cB.clone()])
+      const mat = new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.8 })
+      const line = new THREE.Line(geo, mat)
+      line.renderOrder = 3
+      scene.add(line)
+      return line
+    }
+
+    const clearPendingTolerance = () => {
+      if (tolerancePendingOverlayA) { removeOverlay(tolerancePendingOverlayA); tolerancePendingOverlayA = null }
+      if (tolerancePendingOverlayB) { removeOverlay(tolerancePendingOverlayB); tolerancePendingOverlayB = null }
+      tolerancePendingA = null
+      tolerancePendingB = null
+      showToleranceInput.value = false
+    }
+
+    const clearAllTolerances = () => {
+      clearPendingTolerance()
+      for (const vis of toleranceVisuals) {
+        if (vis.overlayA) removeOverlay(vis.overlayA)
+        if (vis.overlayB) removeOverlay(vis.overlayB)
+        if (vis.line && scene) { scene.remove(vis.line); vis.line.geometry.dispose(); vis.line.material.dispose() }
+      }
+      toleranceVisuals = []
+      toleranceEntriesRef.value = []
+      updateToleranceVar()
+    }
+
+    const toggleToleranceMode = () => {
+      toleranceMode.value = !toleranceMode.value
+      if (!toleranceMode.value) clearPendingTolerance()
+    }
+
+    const handleToleranceFaceClick = (hits) => {
+      if (!hits.length) { clearPendingTolerance(); return }
+      const hit = hits[0]
+      const mesh = hit.object
+      const fi = hit.faceIndex ?? 0
+      const groupIdx = getGroupIndex(mesh, fi)
+      const nmVec = hit.face ? { x: hit.face.normal.x, y: hit.face.normal.y, z: hit.face.normal.z } : { x: 0, y: 1, z: 0 }
+
+      if (!tolerancePendingA) {
+        const centroid = getFaceCentroid(mesh, fi)
+        tolerancePendingA = { mesh, faceIndex: fi, groupIndex: groupIdx, centroid, normal: nmVec, meshName: mesh.name || '' }
+        tolerancePendingOverlayA = makeOverlayMesh(mesh, fi, '#3b82f6', -3)
+      } else if (!tolerancePendingB) {
+        if (mesh === tolerancePendingA.mesh && groupIdx === tolerancePendingA.groupIndex) return
+        const centroid = getFaceCentroid(mesh, fi)
+        tolerancePendingB = { mesh, faceIndex: fi, groupIndex: groupIdx, centroid, normal: nmVec, meshName: mesh.name || '' }
+        tolerancePendingOverlayB = makeOverlayMesh(mesh, fi, '#22c55e', -3)
+        tolerancePendingNominal.value = tolerancePendingA.centroid.distanceTo(centroid)
+        tolerancePendingPlus.value = 0
+        tolerancePendingMinus.value = 0
+        if (camera && renderer) {
+          const mid = new THREE.Vector3().addVectors(tolerancePendingA.centroid, centroid).multiplyScalar(0.5)
+          const w = renderer.domElement.clientWidth || 400
+          const h = renderer.domElement.clientHeight || 300
+          const v = mid.clone().project(camera)
+          const sx = Math.min(Math.max((v.x * 0.5 + 0.5) * w, 100), w - 100)
+          const sy = Math.min(Math.max((v.y * -0.5 + 0.5) * h, 80), h - 20)
+          toleranceInputStyle.value = { left: `${sx}px`, top: `${sy}px` }
+        }
+        showToleranceInput.value = true
+      }
+    }
+
+    const confirmTolerance = () => {
+      if (!tolerancePendingA || !tolerancePendingB) return
+      const id = `tol-${Date.now()}`
+      const cA = tolerancePendingA.centroid
+      const cB = tolerancePendingB.centroid
+      const entry = {
+        id,
+        nominal: tolerancePendingNominal.value,
+        plus:    Math.abs(tolerancePendingPlus.value),
+        minus:   Math.abs(tolerancePendingMinus.value),
+        faceA: { meshName: tolerancePendingA.meshName, centroid: { x: cA.x, y: cA.y, z: cA.z }, normal: tolerancePendingA.normal },
+        faceB: { meshName: tolerancePendingB.meshName, centroid: { x: cB.x, y: cB.y, z: cB.z }, normal: tolerancePendingB.normal },
+      }
+      const overlayA = tolerancePendingOverlayA
+      const overlayB = tolerancePendingOverlayB
+      const line = buildToleranceLine(cA, cB)
+      toleranceVisuals.push({ id, overlayA, overlayB, line })
+      toleranceEntriesRef.value = [...toleranceEntriesRef.value, entry]
+      tolerancePendingA = null; tolerancePendingB = null
+      tolerancePendingOverlayA = null; tolerancePendingOverlayB = null
+      showToleranceInput.value = false
+      updateToleranceVar()
+      emit('trigger-event', { name: 'tolerance-added', event: { ...entry } })
+    }
+
+    const removeToleranceEntry = (id) => {
+      const visIdx = toleranceVisuals.findIndex(v => v.id === id)
+      if (visIdx >= 0) {
+        const vis = toleranceVisuals[visIdx]
+        if (vis.overlayA) removeOverlay(vis.overlayA)
+        if (vis.overlayB) removeOverlay(vis.overlayB)
+        if (vis.line && scene) { scene.remove(vis.line); vis.line.geometry.dispose(); vis.line.material.dispose() }
+        toleranceVisuals.splice(visIdx, 1)
+      }
+      toleranceEntriesRef.value = toleranceEntriesRef.value.filter(e => e.id !== id)
+      updateToleranceVar()
+      emit('trigger-event', { name: 'tolerance-removed', event: { id } })
     }
 
     // ─── Full-model face scan (runs once on load) ─────────────────────────────
@@ -1800,6 +2003,7 @@ export default {
 
       renderer.render(scene, camera)
       if (showAnnotationBadges.value) updateBadgePositions()
+      if (toleranceEntriesRef.value.length > 0) updateToleranceLabelPositions()
     }
 
     // ─── View offset (left/right/top/bottom model centering) ─────────────────
@@ -1852,6 +2056,7 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
+      clearAllTolerances()
       removeEdges()
       clearCornerOverlays()
       clearFeatureOverlays()
@@ -2064,7 +2269,6 @@ export default {
       }
 
       if (!scene || !camera || !loadedModel) return
-      if (props.content?.enableSelection === false) return
 
       const canvas = canvasRef.value
       const rect   = canvas.getBoundingClientRect()
@@ -2075,6 +2279,10 @@ export default {
 
       raycaster.setFromCamera(mouse, camera)
       const hits = raycaster.intersectObjects(clickableMeshes, true)
+
+      if (toleranceMode.value) { handleToleranceFaceClick(hits); return }
+
+      if (props.content?.enableSelection === false) return
 
       if (hits.length > 0) {
         const hit      = hits[0]
@@ -2574,6 +2782,29 @@ export default {
       }
     }
 
+    const updateToleranceLabelPositions = () => {
+      const container = toleranceLabelContainerRef.value
+      if (!container || !camera || !renderer) return
+      const w = renderer.domElement.clientWidth
+      const h = renderer.domElement.clientHeight
+      const entries = toleranceEntriesRef.value
+      const els = container.children
+      for (let i = 0; i < els.length && i < entries.length; i++) {
+        const { faceA, faceB } = entries[i]
+        const mid = new THREE.Vector3(
+          (faceA.centroid.x + faceB.centroid.x) / 2,
+          (faceA.centroid.y + faceB.centroid.y) / 2,
+          (faceA.centroid.z + faceB.centroid.z) / 2,
+        )
+        const v = mid.project(camera)
+        const x = (v.x *  0.5 + 0.5) * w
+        const y = (v.y * -0.5 + 0.5) * h
+        const visible = v.z < 1 && x >= 0 && x <= w && y >= 0 && y <= h
+        els[i].style.transform = `translate(calc(${x}px - 50%), calc(${y}px - 50%))`
+        els[i].style.display = visible ? '' : 'none'
+      }
+    }
+
     // ─── Watchers ─────────────────────────────────────────────────────────────
     watch(() => props.content?.glbData, (val) => { if (val && libsReady.value) loadModel(val) })
 
@@ -2716,6 +2947,26 @@ export default {
       if (libsReady.value && loadedModel) buildFeatureOverlays()
     }, { deep: true })
 
+    watch(() => props.content?.initialTolerances, (entries) => {
+      if (!Array.isArray(entries) || !loadedModel) return
+      clearAllTolerances()
+      for (const entry of entries) {
+        if (!entry?.faceA?.centroid || !entry?.faceB?.centroid) continue
+        const cA = new THREE.Vector3(entry.faceA.centroid.x, entry.faceA.centroid.y, entry.faceA.centroid.z)
+        const cB = new THREE.Vector3(entry.faceB.centroid.x, entry.faceB.centroid.y, entry.faceB.centroid.z)
+        const hitA = _raycastFace(entry.faceA.centroid, entry.faceA.normal)
+        const hitB = _raycastFace(entry.faceB.centroid, entry.faceB.normal)
+        const id = entry.id || `tol-${Date.now()}-${Math.random()}`
+        let overlayA = null, overlayB = null
+        if (hitA) overlayA = makeOverlayMesh(hitA.object, hitA.faceIndex ?? 0, '#3b82f6', -3)
+        if (hitB) overlayB = makeOverlayMesh(hitB.object, hitB.faceIndex ?? 0, '#22c55e', -3)
+        const line = buildToleranceLine(cA, cB)
+        toleranceVisuals.push({ id, overlayA, overlayB, line })
+        toleranceEntriesRef.value = [...toleranceEntriesRef.value, { ...entry, id }]
+      }
+      updateToleranceVar()
+    }, { deep: true })
+
     // Phase 4: Re-evaluate rules when rule definitions change; then refresh overlays
     watch(() => props.content?.designRules, (rules) => {
       if (!currentFeatureModel) return
@@ -2768,6 +3019,7 @@ export default {
       clearAllSelections()
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
+      clearAllTolerances()
       clearCornerOverlays()
       clearFeatureOverlays()
       facesData           = []
@@ -2785,6 +3037,7 @@ export default {
     return {
       // DOM
       rootRef, canvasRef, fileInputRef, badgeContainerRef,
+      toleranceLabelContainerRef,
       content: props.content,
       // UI
       isLoading, loadingMsg, errorMsg, selectionLabel, libsReady,
@@ -2792,6 +3045,11 @@ export default {
       rootStyle,
       // Phase 3: badge layer
       showAnnotationBadges, processedAnnotations, showBadgeLabel,
+      // Tolerance mode
+      toleranceMode, toleranceEntriesRef,
+      showToleranceInput, toleranceInputStyle,
+      tolerancePendingNominal, tolerancePendingPlus, tolerancePendingMinus,
+      toggleToleranceMode, confirmTolerance, cancelTolerance: clearPendingTolerance, removeToleranceEntry,
       // Handlers
       onPointerDown, onCanvasClick,
       resetCamera, rotateLeft, rotateRight,
@@ -3005,6 +3263,149 @@ export default {
 
     &:empty {
       display: none;
+    }
+  }
+
+  // ── Tolerance mode ────────────────────────────────────────────────────────────
+  .ctrl-btn--active {
+    background: rgba(59, 130, 246, 0.25) !important;
+    color: #3b82f6 !important;
+  }
+
+  .tolerance-input-panel {
+    position: absolute;
+    z-index: 20;
+    background: #0D0D0D;
+    border-radius: 8px;
+    padding: 12px;
+    min-width: 180px;
+    pointer-events: all;
+    transform: translate(-50%, calc(-100% - 10px));
+
+    .tol-panel-header {
+      margin-bottom: 10px;
+      text-align: center;
+      .tol-nominal {
+        display: block;
+        font-size: 15px;
+        font-weight: 600;
+        color: #ffffff;
+        font-family: monospace;
+      }
+      .tol-label-text {
+        display: block;
+        font-size: 10px;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+    }
+
+    .tol-fields {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+      .tol-field {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1;
+        .tol-sign {
+          font-size: 14px;
+          font-weight: 700;
+          width: 10px;
+          flex-shrink: 0;
+          &.tol-plus  { color: #22c55e; }
+          &.tol-minus { color: #ef4444; }
+        }
+        .tol-input {
+          width: 100%;
+          min-width: 0;
+          background: #1a1a1a;
+          border: 1px solid #333;
+          border-radius: 4px;
+          padding: 4px 6px;
+          color: #fff;
+          font-size: 12px;
+          font-family: monospace;
+          text-align: right;
+          &:focus { outline: none; border-color: #555; }
+          &::-webkit-outer-spin-button,
+          &::-webkit-inner-spin-button { -webkit-appearance: none; }
+        }
+      }
+    }
+
+    .tol-actions {
+      display: flex;
+      gap: 6px;
+      .tol-btn-cancel, .tol-btn-confirm {
+        flex: 1;
+        padding: 5px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        border: none;
+      }
+      .tol-btn-cancel {
+        background: #2a2a2a;
+        color: #999;
+        &:hover { background: #333; color: #fff; }
+      }
+      .tol-btn-confirm {
+        background: #3b82f6;
+        color: #fff;
+        &:hover { background: #2563eb; }
+      }
+    }
+  }
+
+  .tolerance-label-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: visible;
+
+    .tolerance-label {
+      position: absolute;
+      background: rgba(13, 13, 13, 0.9);
+      border-radius: 6px;
+      padding: 4px 10px;
+      pointer-events: all;
+      min-width: 80px;
+      text-align: center;
+      .tol-lbl-nominal {
+        display: block;
+        font-size: 11px;
+        font-weight: 600;
+        color: #fff;
+        font-family: monospace;
+      }
+      .tol-lbl-tol {
+        display: block;
+        font-size: 10px;
+        color: #aaa;
+        font-family: monospace;
+      }
+      .tol-lbl-remove {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        width: 14px;
+        height: 14px;
+        background: #ef4444;
+        border: none;
+        border-radius: 50%;
+        color: #fff;
+        font-size: 9px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        line-height: 1;
+      }
     }
   }
 }

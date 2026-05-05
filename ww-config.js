@@ -416,6 +416,17 @@ export default {
       /* wwEditor:end */
     },
 
+    initialTolerances: {
+      hidden: true,
+      defaultValue: [],
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Array of saved tolerance entries to reload into the viewer',
+      },
+      /* wwEditor:end */
+    },
+
     showGrid: {
       label: { en: 'Show Grid' },
       type: 'OnOff',
@@ -726,6 +737,23 @@ export default {
         score:          100,  // 0–100 percentage of rules passing
         violationCount: 0,
       },
+    },
+    {
+      name: 'tolerance-added',
+      label: { en: 'On Tolerance Added' },
+      event: {
+        id:      '',
+        nominal: 0,
+        plus:    0,
+        minus:   0,
+        faceA:   { meshName: '', centroid: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 0, z: 0 } },
+        faceB:   { meshName: '', centroid: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 0, z: 0 } },
+      },
+    },
+    {
+      name: 'tolerance-removed',
+      label: { en: 'On Tolerance Removed' },
+      event: { id: '' },
     },
   ],
 }
