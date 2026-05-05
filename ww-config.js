@@ -384,6 +384,38 @@ export default {
       /* wwEditor:end */
     },
 
+    modelOffsetTop: {
+      label: { en: 'Model Offset Top (px)' },
+      type: 'Number',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 0,
+      options: { min: -2000, max: 2000, step: 1 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Shifts the model down by this many pixels, adding visual space on the top.',
+      },
+      propertyHelp: 'Use when a top panel overlaps the viewer — positive values push the model toward the center.',
+      /* wwEditor:end */
+    },
+
+    modelOffsetBottom: {
+      label: { en: 'Model Offset Bottom (px)' },
+      type: 'Number',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 0,
+      options: { min: -2000, max: 2000, step: 1 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Shifts the model up by this many pixels, adding visual space on the bottom.',
+      },
+      propertyHelp: 'Use when a bottom panel overlaps the viewer — positive values push the model toward the center.',
+      /* wwEditor:end */
+    },
+
     showGrid: {
       label: { en: 'Show Grid' },
       type: 'OnOff',

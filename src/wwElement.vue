@@ -1802,16 +1802,19 @@ export default {
       if (showAnnotationBadges.value) updateBadgePositions()
     }
 
-    // ─── View offset (left/right model centering) ─────────────────────────────
+    // ─── View offset (left/right/top/bottom model centering) ─────────────────
     const applyViewOffset = () => {
       if (!camera || !renderer) return
       const W   = renderer.domElement.width
       const H   = renderer.domElement.height
       const ox  = (props.content?.modelOffsetLeft ?? 0) - (props.content?.modelOffsetRight ?? 0)
-      if (ox !== 0) {
-        const abs    = Math.abs(ox)
-        const startX = ox < 0 ? 2 * abs : 0
-        camera.setViewOffset(W + 2 * abs, H, startX, 0, W, H)
+      const oy  = (props.content?.modelOffsetTop  ?? 0) - (props.content?.modelOffsetBottom ?? 0)
+      if (ox !== 0 || oy !== 0) {
+        const absX   = Math.abs(ox)
+        const absY   = Math.abs(oy)
+        const startX = ox < 0 ? 2 * absX : 0
+        const startY = oy < 0 ? 2 * absY : 0
+        camera.setViewOffset(W + 2 * absX, H + 2 * absY, startX, startY, W, H)
       } else {
         camera.clearViewOffset()
       }
@@ -2694,7 +2697,12 @@ export default {
       }
     })
 
-    watch(() => [props.content?.modelOffsetLeft, props.content?.modelOffsetRight], () => {
+    watch(() => [
+      props.content?.modelOffsetLeft,
+      props.content?.modelOffsetRight,
+      props.content?.modelOffsetTop,
+      props.content?.modelOffsetBottom,
+    ], () => {
       applyViewOffset()
     })
 
