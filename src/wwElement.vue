@@ -363,7 +363,8 @@ export default {
     let ambientLight   = null
     let keyLight       = null
     let facesData      = []   // unified face list for click enrichment
-    let holeMeshNames  = new Set()  // mesh names belonging to full holes (arcDeg ≥ 350)
+    let holeMeshNames  = new Set()   // mesh names belonging to full holes (arcDeg ≥ 350)
+    let holeMeshArray  = []          // actual THREE.Mesh objects for hole-priority raycasting
     let edgeLines        = []   // LineSegments overlaying hard geometric edges
     let cornerOverlays   = []   // face overlays for acute/obtuse corner faces
     let cornersData      = []   // deduplicated corner entries (exposed via variable)
@@ -1457,13 +1458,16 @@ export default {
             m.transparent = false
             m.opacity     = 1
             m.depthWrite  = true
+            m.depthTest   = !needsTransparency
           } else {
             m.transparent = needsTransparency
             m.opacity     = op
             m.depthWrite  = !needsTransparency
+            m.depthTest   = true
           }
           m.needsUpdate = true
         })
+        if (isHole) obj.renderOrder = needsTransparency ? 2 : 0
       })
     }
 
@@ -1483,8 +1487,10 @@ export default {
           transparent: isHole ? false : needsTransparency,
           opacity:     isHole ? 1 : (needsTransparency ? op : 1),
           depthWrite:  isHole ? true : !needsTransparency,
+          depthTest:   isHole ? !needsTransparency : true,
         })
         obj.material = mat
+        obj.renderOrder = (isHole && needsTransparency) ? 2 : 0
         overrideMaterials.push(mat)
       })
     }
@@ -1495,6 +1501,7 @@ export default {
         if (!obj.isMesh) return
         const orig = originalMaterials.get(obj)
         if (orig !== undefined) obj.material = orig
+        obj.renderOrder = 0
       })
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
@@ -2063,6 +2070,7 @@ export default {
       facesData          = []
       cornersData        = []
       holeMeshNames      = new Set()
+      holeMeshArray      = []
       currentFeatureModel = null
       currentRuleResult   = null
 
@@ -2178,6 +2186,7 @@ export default {
             else if (face.meshName) holeMeshNames.add(face.meshName)
           }
         }
+        holeMeshArray = clickableMeshes.filter(m => holeMeshNames.has(m.name))
         setFacesVar(allFaces)
 
         // Detect and render sharp / non-90° corners
@@ -2278,11 +2287,14 @@ export default {
       )
 
       raycaster.setFromCamera(mouse, camera)
-      const hits = raycaster.intersectObjects(clickableMeshes, true)
+      const allHits = raycaster.intersectObjects(clickableMeshes, true)
 
-      if (toleranceMode.value) { handleToleranceFaceClick(hits); return }
+      if (toleranceMode.value) { handleToleranceFaceClick(allHits); return }
 
       if (props.content?.enableSelection === false) return
+
+      const holeHits = holeMeshArray.length > 0 ? raycaster.intersectObjects(holeMeshArray, true) : []
+      const hits = holeHits.length > 0 ? holeHits : allHits
 
       if (hits.length > 0) {
         const hit      = hits[0]
@@ -3033,6 +3045,7 @@ export default {
       facesData           = []
       cornersData         = []
       holeMeshNames       = new Set()
+      holeMeshArray       = []
       currentFeatureModel = null
       currentRuleResult   = null
       removeEdges()
