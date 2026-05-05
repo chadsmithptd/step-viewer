@@ -323,6 +323,20 @@ export default {
       /* wwEditor:end */
     },
 
+    multiSelectMode: {
+      label: { en: 'Multi-Select Mode' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'When on, every face click toggles it in/out of the selection without needing to hold Shift.',
+      },
+      /* wwEditor:end */
+    },
+
     annotationColor: {
       label: { en: 'Annotation Highlight Color' },
       type: 'Color',

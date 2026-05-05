@@ -2359,7 +2359,7 @@ export default {
         }
 
         // ── Selection logic ───────────────────────────────────────────────────
-        if (isShiftHeld) {
+        if (isShiftHeld || props.content?.multiSelectMode) {
           // Toggle this face in/out of the multi-selection
           const existingIdx = selections.findIndex(
             s => s.mesh === mesh && s.groupIndex === groupIdx
