@@ -2947,6 +2947,14 @@ export default {
       if (libsReady.value && loadedModel) buildFeatureOverlays()
     }, { deep: true })
 
+    watch(() => props.content?.enableToleranceMode, (val) => {
+      const on = val === true
+      if (toleranceMode.value !== on) {
+        toleranceMode.value = on
+        if (!on) clearPendingTolerance()
+      }
+    })
+
     watch(() => props.content?.initialTolerances, (entries) => {
       if (!Array.isArray(entries) || !loadedModel) return
       clearAllTolerances()

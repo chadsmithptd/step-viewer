@@ -416,6 +416,20 @@ export default {
       /* wwEditor:end */
     },
 
+    enableToleranceMode: {
+      label: { en: 'Tolerance Mode' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Toggle tolerance measurement mode on/off. Can be bound to an external button or toggle.',
+      },
+      /* wwEditor:end */
+    },
+
     initialTolerances: {
       hidden: true,
       defaultValue: [],
