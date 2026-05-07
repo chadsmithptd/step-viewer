@@ -70,14 +70,14 @@
           <path d="M20.49 15a9 9 0 1 1-.49-4.5"/>
         </svg>
       </button>
-      <button class="ctrl-btn" title="Load GLB file" @click="triggerFileUpload">
+      <button v-if="showUploadButton" class="ctrl-btn" title="Load GLB file" @click="triggerFileUpload">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="17 8 12 3 7 8"/>
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
       </button>
-      <button class="ctrl-btn" :class="{ 'ctrl-btn--active': toleranceMode }" title="Tolerance Mode" @click="toggleToleranceMode">
+      <button v-if="showToleranceButton" class="ctrl-btn" :class="{ 'ctrl-btn--active': toleranceMode }" title="Tolerance Mode" @click="toggleToleranceMode">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="3" y1="4" x2="3" y2="20"/>
           <line x1="21" y1="4" x2="21" y2="20"/>
@@ -408,7 +408,9 @@ export default {
       background: props.content?.backgroundColor || 'transparent',
     }))
 
-    const showBadgeLabel = computed(() => props.content?.showBadgeLabel !== false)
+    const showBadgeLabel     = computed(() => props.content?.showBadgeLabel !== false)
+    const showUploadButton   = computed(() => props.content?.showUploadButton !== false)
+    const showToleranceButton = computed(() => props.content?.showToleranceButton !== false)
 
     // Resolved annotation array — handles formula field mapping
     const processedAnnotations = computed(() => {
@@ -2114,7 +2116,7 @@ export default {
         modelRadius = maxDim * 0.6
 
         const fov  = camera.fov * (Math.PI / 180)
-        const dist = (maxDim / 2) / Math.tan(fov / 2) * 1.1
+        const dist = (maxDim / 2) / Math.tan(fov / 2) * 1.467
 
         camera.position.set(center.x + dist, center.y + dist * 0.7, center.z + dist)
         camera.near = maxDim * 0.0001
@@ -3065,7 +3067,7 @@ export default {
       modelLoaded, isDragging,
       rootStyle,
       // Phase 3: badge layer
-      showAnnotationBadges, processedAnnotations, showBadgeLabel,
+      showAnnotationBadges, processedAnnotations, showBadgeLabel, showUploadButton, showToleranceButton,
       // Tolerance mode
       toleranceMode, toleranceEntriesRef,
       showToleranceInput, toleranceInputStyle,
