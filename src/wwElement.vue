@@ -416,6 +416,7 @@ export default {
     let orthoCamera       = null
     let activeCamera      = null
     let drawingEdges      = []
+    let silhouetteEdges   = []   // view-dependent outline edges, rebuilt on each set2DView
     let drawing2DLineMats = []   // LineMaterial instances that need resolution updates on resize
 
     // MBD state — plain vars, no Vue reactivity overhead
@@ -1578,6 +1579,89 @@ export default {
       }
       drawingEdges      = []
       drawing2DLineMats = []
+      removeSilhouetteEdges()
+    }
+
+    // Compute which edges straddle the silhouette boundary for a given view direction.
+    // Returns a Float32Array of world-space position pairs (x0,y0,z0, x1,y1,z1, …)
+    // or null if nothing was found.
+    const computeSilhouettePositions = (mesh, viewDir) => {
+      const geo  = mesh.geometry
+      const pos  = geo.attributes.position
+      const idx  = geo.index
+      if (!pos) return null
+
+      const wm       = mesh.matrixWorld
+      const edgeMap  = new Map()
+      const _va = new THREE.Vector3()
+      const _vb = new THREE.Vector3()
+      const _vc = new THREE.Vector3()
+      const _e1 = new THREE.Vector3()
+      const _e2 = new THREE.Vector3()
+      const _n  = new THREE.Vector3()
+      const triCount = idx ? idx.count / 3 : pos.count / 3
+
+      for (let t = 0; t < triCount; t++) {
+        const i0 = idx ? idx.getX(t * 3)     : t * 3
+        const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1
+        const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2
+
+        _va.fromBufferAttribute(pos, i0).applyMatrix4(wm)
+        _vb.fromBufferAttribute(pos, i1).applyMatrix4(wm)
+        _vc.fromBufferAttribute(pos, i2).applyMatrix4(wm)
+
+        _e1.subVectors(_vb, _va)
+        _e2.subVectors(_vc, _va)
+        _n.crossVectors(_e1, _e2).normalize()
+        const dot = _n.dot(viewDir)
+
+        for (const [a, b, p0, p1] of [[i0, i1, _va, _vb], [i1, i2, _vb, _vc], [i2, i0, _vc, _va]]) {
+          const key = a < b ? `${a}_${b}` : `${b}_${a}`
+          if (!edgeMap.has(key)) edgeMap.set(key, { p0: p0.clone(), p1: p1.clone(), dots: [] })
+          edgeMap.get(key).dots.push(dot)
+        }
+      }
+
+      const out = []
+      for (const { p0, p1, dots } of edgeMap.values()) {
+        const isSilhouette = dots.length === 1 || (dots[0] > 0) !== (dots[1] > 0)
+        if (isSilhouette) out.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z)
+      }
+      return out.length > 0 ? new Float32Array(out) : null
+    }
+
+    const removeSilhouetteEdges = () => {
+      for (const { obj, mat } of silhouetteEdges) {
+        scene?.remove(obj)
+        obj.geometry?.dispose()
+        mat?.dispose()
+      }
+      silhouetteEdges = []
+    }
+
+    const buildSilhouetteEdges = () => {
+      removeSilhouetteEdges()
+      if (!loadedModel || !orthoCamera) return
+
+      const viewDir   = new THREE.Vector3()
+      orthoCamera.getWorldDirection(viewDir)
+      const lineColor = new THREE.Color(props.content?.drawing2DLineColor || '#1a1a1a')
+      const w = renderer?.domElement?.width  || 400
+      const h = renderer?.domElement?.height || 300
+
+      for (const mesh of clickableMeshes) {
+        const positions = computeSilhouettePositions(mesh, viewDir)
+        if (!positions) continue
+
+        const lsg = new LineSegmentsGeometry()
+        lsg.setPositions(positions)
+        const mat = new LineMaterial({ color: lineColor, linewidth: 2.0, resolution: new THREE.Vector2(w, h) })
+        const lines = new LineSegments2(lsg, mat)
+        lines.renderOrder = 3
+        scene.add(lines)
+        silhouetteEdges.push({ obj: lines, mat })
+        drawing2DLineMats.push(mat)
+      }
     }
 
     const buildDrawingEdges = () => {
@@ -1593,8 +1677,9 @@ export default {
       for (const mesh of clickableMeshes) {
         mesh.updateWorldMatrix(true, false)
 
-        // Depth-prepass mesh — fills depth buffer so visible-line depth testing is accurate
-        const depthMat  = new THREE.MeshBasicMaterial({ colorWrite: false })
+        // Depth-prepass mesh — fills depth buffer so visible-line depth testing is accurate.
+        // polygonOffset pushes the prepass surface slightly back so edge lines always win.
+        const depthMat  = new THREE.MeshBasicMaterial({ colorWrite: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 })
         const depthMesh = new THREE.Mesh(mesh.geometry, depthMat)
         depthMesh.matrixAutoUpdate = false
         depthMesh.matrix.copy(mesh.matrixWorld)
@@ -1665,6 +1750,7 @@ export default {
       orthoCamera.lookAt(c)
       controls.target.copy(c)
       controls.update()
+      buildSilhouetteEdges()
     }
 
     const enter2DMode = (view = 'front') => {
@@ -1693,6 +1779,7 @@ export default {
 
     const exit2DMode = () => {
       removeDrawingEdges()
+      removeSilhouetteEdges()
       if (loadedModel) loadedModel.visible = true
 
       const bgColor = props.content?.backgroundColor
