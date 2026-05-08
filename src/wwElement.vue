@@ -2830,6 +2830,7 @@ export default {
           id:        `hole-${i}`,
           diameter:  c.diameter,
           depth:     c.depth,
+          ldRatio:   (c.depth != null && c.diameter > 0) ? Math.round((c.depth / c.diameter) * 100) / 100 : null,
           axis:      c.axis,
           center:    c.center,
           arcDeg:    c.arcDeg,
