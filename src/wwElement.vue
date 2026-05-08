@@ -88,15 +88,7 @@
           <line x1="15" y1="16" x2="21" y2="16"/>
         </svg>
       </button>
-      <button v-if="show2DToggle && modelLoaded" class="ctrl-btn" :class="{ 'ctrl-btn--active': is2DMode }" title="2D Drawing View" @click="toggle2DMode">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="1"/>
-          <line x1="3" y1="9" x2="21" y2="9"/>
-          <line x1="3" y1="15" x2="21" y2="15"/>
-          <line x1="9" y1="3" x2="9" y2="21"/>
-          <line x1="15" y1="3" x2="15" y2="21"/>
-        </svg>
-      </button>
+      <button v-if="show2DToggle && modelLoaded" class="ctrl-btn ctrl-btn--2d" :class="{ 'ctrl-btn--active': is2DMode }" title="2D Drawing View" @click="toggle2DMode">2D</button>
     </div>
 
     <!-- 2D view axis selector -->
@@ -421,9 +413,10 @@ export default {
     let tolerancePendingOverlayB = null
     let toleranceVisuals         = []
 
-    let orthoCamera  = null
-    let activeCamera = null
-    let drawingEdges = []
+    let orthoCamera       = null
+    let activeCamera      = null
+    let drawingEdges      = []
+    let drawing2DLineMats = []   // LineMaterial instances that need resolution updates on resize
 
     // MBD state — plain vars, no Vue reactivity overhead
     let currentFeatureModel = null
@@ -1583,22 +1576,24 @@ export default {
         if (ownGeo) obj.geometry?.dispose()
         obj.material?.dispose()
       }
-      drawingEdges = []
+      drawingEdges      = []
+      drawing2DLineMats = []
     }
 
     const buildDrawingEdges = () => {
       removeDrawingEdges()
       if (!loadedModel) return
 
-      const lineColor   = new THREE.Color(props.content?.drawing2DLineColor        || '#1a1a1a')
-      const hiddenColor = new THREE.Color(props.content?.drawing2DHiddenLineColor   || '#7a8fa6')
+      const lineColor   = new THREE.Color(props.content?.drawing2DLineColor      || '#1a1a1a')
+      const hiddenColor = new THREE.Color(props.content?.drawing2DHiddenLineColor || '#7a8fa6')
       const showHidden  = props.content?.drawing2DShowHiddenLines !== false
+      const w           = renderer?.domElement?.width  || 400
+      const h           = renderer?.domElement?.height || 300
 
       for (const mesh of clickableMeshes) {
         mesh.updateWorldMatrix(true, false)
 
-        // Invisible depth-prepass mesh — fills the depth buffer so visible-line
-        // depth testing works correctly against the model surface
+        // Depth-prepass mesh — fills depth buffer so visible-line depth testing is accurate
         const depthMat  = new THREE.MeshBasicMaterial({ colorWrite: false })
         const depthMesh = new THREE.Mesh(mesh.geometry, depthMat)
         depthMesh.matrixAutoUpdate = false
@@ -1612,12 +1607,8 @@ export default {
         if (showHidden) {
           // Hidden lines — dashed, faint, no depth test so they show through surfaces
           const hiddenMat   = new THREE.LineDashedMaterial({
-            color:       hiddenColor,
-            dashSize:    1.5,
-            gapSize:     1.5,
-            opacity:     0.28,
-            transparent: true,
-            depthTest:   false,
+            color: hiddenColor, dashSize: 1.5, gapSize: 1.5,
+            opacity: 0.28, transparent: true, depthTest: false,
           })
           const hiddenLines = new THREE.LineSegments(edgesGeo, hiddenMat)
           hiddenLines.computeLineDistances()
@@ -1627,24 +1618,30 @@ export default {
           scene.add(hiddenLines)
           drawingEdges.push({ obj: hiddenLines, ownGeo: true })
 
-          // Visible lines — solid, depth tested, renders over hidden pass
-          const visGeo   = edgesGeo.clone()
-          const visMat   = new THREE.LineBasicMaterial({ color: lineColor, depthTest: true })
-          const visLines = new THREE.LineSegments(visGeo, visMat)
-          visLines.matrixAutoUpdate = false
-          visLines.matrix.copy(mesh.matrixWorld)
-          visLines.renderOrder = 2
-          scene.add(visLines)
-          drawingEdges.push({ obj: visLines, ownGeo: true })
+          // Visible lines — LineSegments2 for true pixel-width thickness
+          const lsg    = new LineSegmentsGeometry()
+          lsg.setPositions(edgesGeo.attributes.position.array)
+          const visMat = new LineMaterial({ color: lineColor, linewidth: 1.8, resolution: new THREE.Vector2(w, h) })
+          const vis    = new LineSegments2(lsg, visMat)
+          vis.matrixAutoUpdate = false
+          vis.matrix.copy(mesh.matrixWorld)
+          vis.renderOrder = 2
+          scene.add(vis)
+          drawingEdges.push({ obj: vis, ownGeo: true })
+          drawing2DLineMats.push(visMat)
         } else {
           // Visible lines only
-          const visMat   = new THREE.LineBasicMaterial({ color: lineColor, depthTest: true })
-          const visLines = new THREE.LineSegments(edgesGeo, visMat)
-          visLines.matrixAutoUpdate = false
-          visLines.matrix.copy(mesh.matrixWorld)
-          visLines.renderOrder = 2
-          scene.add(visLines)
-          drawingEdges.push({ obj: visLines, ownGeo: true })
+          const lsg    = new LineSegmentsGeometry()
+          lsg.setPositions(edgesGeo.attributes.position.array)
+          const visMat = new LineMaterial({ color: lineColor, linewidth: 1.8, resolution: new THREE.Vector2(w, h) })
+          const vis    = new LineSegments2(lsg, visMat)
+          vis.matrixAutoUpdate = false
+          vis.matrix.copy(mesh.matrixWorld)
+          vis.renderOrder = 2
+          scene.add(vis)
+          drawingEdges.push({ obj: vis, ownGeo: true })
+          drawing2DLineMats.push(visMat)
+          edgesGeo.dispose()
         }
       }
     }
@@ -2225,6 +2222,7 @@ export default {
         orthoCamera.top    =  s
         orthoCamera.bottom = -s
         orthoCamera.updateProjectionMatrix()
+        for (const mat of drawing2DLineMats) mat.resolution?.set(w, h)
       }
       for (const o of cornerOverlays) {
         if (o?.material?.resolution) o.material.resolution.set(w, h)
@@ -3357,6 +3355,12 @@ export default {
 
     &:hover  { background: rgba(255, 255, 255, 0.15); }
     &:active { background: rgba(255, 255, 255, 0.25); }
+
+    &--2d {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
   }
 
   // ── Selection badge ────────────────────────────────────────────────────────
