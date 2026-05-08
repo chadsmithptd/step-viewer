@@ -2191,19 +2191,8 @@ export default {
         holeMeshArray = clickableMeshes.filter(m => holeMeshNames.has(m.name))
         setFacesVar(allFaces)
 
-        // Detect and render sharp / non-90° corners
-        const cornerResult = detectSharpCorners(props.content?.cornerAngleTolerance ?? 10)
-        cornersData = cornerResult.data
-        setSharpCornersVar(cornersData)
-        buildCornerOverlays(cornersData)
-        emit('trigger-event', {
-          name:  'sharp-corners-detected',
-          event: {
-            corners:     cornersData,
-            acuteCount:  cornersData.filter(c => c.type === 'acute').length,
-            obtuseCount: cornersData.filter(c => c.type === 'obtuse').length,
-          },
-        })
+        // Sharp corner detection disabled for performance — see docs/reactivate-sharp-corners.md
+        const cornerResult = null
 
         const holeCount = mergedCylinders.filter(c => c.isHole === true).length
         const bossCount = mergedCylinders.filter(c => c.isHole === false).length
@@ -2904,30 +2893,7 @@ export default {
       edgeLines.forEach(l => l.material.color.set(color || '#222222'))
     })
 
-    // Re-detect when tolerance changes; rebuild lines when toggle or colors change
-    watch(() => props.content?.cornerAngleTolerance, () => {
-      if (!libsReady.value || !loadedModel) return
-      const result = detectSharpCorners(props.content?.cornerAngleTolerance ?? 10)
-      cornersData = result.data
-      setSharpCornersVar(cornersData)
-      buildCornerOverlays(cornersData)
-      emit('trigger-event', {
-        name:  'sharp-corners-detected',
-        event: {
-          corners:     cornersData,
-          acuteCount:  cornersData.filter(c => c.type === 'acute').length,
-          obtuseCount: cornersData.filter(c => c.type === 'obtuse').length,
-        },
-      })
-    })
-
-    watch(() => props.content?.showCorners, () => {
-      if (libsReady.value && loadedModel) buildCornerOverlays(cornersData)
-    })
-
-    watch(() => [props.content?.acuteCornerColor, props.content?.obtuseCornerColor], () => {
-      if (libsReady.value && loadedModel) buildCornerOverlays(cornersData)
-    })
+    // Corner watchers disabled — see docs/reactivate-sharp-corners.md
 
     watch(() => props.content?.showGrid, (show) => {
       if (!scene) return
