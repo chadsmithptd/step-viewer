@@ -472,6 +472,48 @@ export default {
       /* wwEditor:end */
     },
 
+    show2DToggle: {
+      label: { en: 'Show 2D Drawing Button' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Show or hide the 2D flat drawing toggle button in the left controls panel.',
+      },
+      /* wwEditor:end */
+    },
+
+    drawing2DLineColor: {
+      label: { en: '2D Line Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#1a1a1a',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Color of the edge lines drawn in 2D flat drawing mode.',
+      },
+      /* wwEditor:end */
+    },
+
+    drawing2DBackground: {
+      label: { en: '2D Background Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#ffffff',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Background color applied when 2D drawing mode is active.',
+      },
+      /* wwEditor:end */
+    },
+
     initialTolerances: {
       hidden: true,
       defaultValue: [],

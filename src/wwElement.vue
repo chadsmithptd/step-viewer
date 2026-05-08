@@ -88,6 +88,26 @@
           <line x1="15" y1="16" x2="21" y2="16"/>
         </svg>
       </button>
+      <button v-if="show2DToggle && modelLoaded" class="ctrl-btn" :class="{ 'ctrl-btn--active': is2DMode }" title="2D Drawing View" @click="toggle2DMode">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="1"/>
+          <line x1="3" y1="9" x2="21" y2="9"/>
+          <line x1="3" y1="15" x2="21" y2="15"/>
+          <line x1="9" y1="3" x2="9" y2="21"/>
+          <line x1="15" y1="3" x2="15" y2="21"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- 2D view axis selector -->
+    <div v-if="is2DMode" class="view2d-panel">
+      <button
+        v-for="v in ['Front','Back','Top','Bottom','Right','Left']"
+        :key="v"
+        class="view2d-btn"
+        :class="{ 'view2d-btn--active': current2DView === v.toLowerCase() }"
+        @click="set2DView(v.toLowerCase())"
+      >{{ v }}</button>
     </div>
 
     <!-- Selection badge -->
@@ -215,6 +235,8 @@ export default {
 
     const toleranceMode            = ref(false)
     const showToleranceInput       = ref(false)
+    const is2DMode                 = ref(false)
+    const current2DView            = ref('front')
     const tolerancePendingNominal  = ref(0)
     const tolerancePendingPlus     = ref(0)
     const tolerancePendingMinus    = ref(0)
@@ -350,6 +372,11 @@ export default {
       _wwToleranceVar?.setValue?.(toleranceEntriesRef.value)
     }
 
+    const _ww2DModeVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({ uid: props.uid, name: 'is2DMode', type: 'boolean', defaultValue: false })
+      : null
+    const set2DModeVar = (val) => _ww2DModeVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -394,6 +421,10 @@ export default {
     let tolerancePendingOverlayB = null
     let toleranceVisuals         = []
 
+    let orthoCamera  = null
+    let activeCamera = null
+    let drawingEdges = []
+
     // MBD state — plain vars, no Vue reactivity overhead
     let currentFeatureModel = null
     let currentRuleResult   = null
@@ -408,9 +439,10 @@ export default {
       background: props.content?.backgroundColor || 'transparent',
     }))
 
-    const showBadgeLabel     = computed(() => props.content?.showBadgeLabel !== false)
-    const showUploadButton   = computed(() => props.content?.showUploadButton !== false)
+    const showBadgeLabel      = computed(() => props.content?.showBadgeLabel !== false)
+    const showUploadButton    = computed(() => props.content?.showUploadButton !== false)
     const showToleranceButton = computed(() => props.content?.showToleranceButton !== false)
+    const show2DToggle        = computed(() => props.content?.show2DToggle !== false)
 
     // Resolved annotation array — handles formula field mapping
     const processedAnnotations = computed(() => {
@@ -1544,6 +1576,100 @@ export default {
       }
     }
 
+    // ─── 2D Drawing mode ─────────────────────────────────────────────────────
+    const removeDrawingEdges = () => {
+      for (const l of drawingEdges) {
+        scene?.remove(l)
+        l.geometry.dispose()
+        l.material.dispose()
+      }
+      drawingEdges = []
+    }
+
+    const buildDrawingEdges = () => {
+      removeDrawingEdges()
+      if (!loadedModel) return
+      const color = new THREE.Color(props.content?.drawing2DLineColor || '#1a1a1a')
+      const mat   = new THREE.LineBasicMaterial({ color, depthTest: false })
+      for (const mesh of clickableMeshes) {
+        mesh.updateWorldMatrix(true, false)
+        const edgesGeo = new THREE.EdgesGeometry(mesh.geometry, 15)
+        const lines    = new THREE.LineSegments(edgesGeo, mat.clone())
+        lines.matrixAutoUpdate = false
+        lines.matrix.copy(mesh.matrixWorld)
+        lines.renderOrder = 2
+        scene.add(lines)
+        drawingEdges.push(lines)
+      }
+    }
+
+    const set2DView = (view) => {
+      if (!orthoCamera || !defaultTarget) return
+      current2DView.value = view
+      const c    = defaultTarget
+      const dist = modelRadius * 10
+      const views = {
+        front:  { pos: [c.x, c.y, c.z + dist], up: [0, 1, 0] },
+        back:   { pos: [c.x, c.y, c.z - dist], up: [0, 1, 0] },
+        top:    { pos: [c.x, c.y + dist, c.z], up: [0, 0, -1] },
+        bottom: { pos: [c.x, c.y - dist, c.z], up: [0, 0,  1] },
+        right:  { pos: [c.x + dist, c.y, c.z], up: [0, 1, 0] },
+        left:   { pos: [c.x - dist, c.y, c.z], up: [0, 1, 0] },
+      }
+      const v = views[view] || views.front
+      orthoCamera.position.set(...v.pos)
+      orthoCamera.up.set(...v.up)
+      orthoCamera.lookAt(c)
+      controls.target.copy(c)
+      controls.update()
+    }
+
+    const enter2DMode = (view = 'front') => {
+      if (!camera || !renderer) return
+      const w      = renderer.domElement.width  || 400
+      const h      = renderer.domElement.height || 300
+      const aspect = w / h
+      const s      = modelRadius * 1.5
+
+      orthoCamera = new THREE.OrthographicCamera(-s * aspect, s * aspect, s, -s, -modelRadius * 200, modelRadius * 200)
+
+      controls.object   = orthoCamera
+      controls.noRotate = true
+      activeCamera      = orthoCamera
+
+      if (loadedModel) loadedModel.visible = false
+      buildDrawingEdges()
+
+      const bg = props.content?.drawing2DBackground
+      scene.background = bg ? new THREE.Color(bg) : new THREE.Color('#ffffff')
+
+      set2DView(view)
+      is2DMode.value = true
+      set2DModeVar(true)
+    }
+
+    const exit2DMode = () => {
+      removeDrawingEdges()
+      if (loadedModel) loadedModel.visible = true
+
+      const bgColor = props.content?.backgroundColor
+      scene.background = bgColor ? new THREE.Color(bgColor) : null
+
+      if (orthoCamera) { orthoCamera = null }
+      controls.object   = camera
+      controls.noRotate = false
+      activeCamera      = camera
+      controls.update()
+
+      is2DMode.value = false
+      set2DModeVar(false)
+    }
+
+    const toggle2DMode = () => {
+      if (is2DMode.value) exit2DMode()
+      else enter2DMode(current2DView.value)
+    }
+
     // ─── Sharp corner detection ───────────────────────────────────────────────
     // STEP/OCCT GLB exports tessellate each B-Rep face independently — boundary
     // vertices are NOT shared between adjacent faces. Vertex-index adjacency never
@@ -1955,6 +2081,7 @@ export default {
       camera = new THREE.PerspectiveCamera(45, w / h, 0.001, 100000)
       camera.position.set(5, 5, 5)
       camera.lookAt(0, 0, 0)
+      activeCamera = camera
 
       controls = new TrackballControls(camera, renderer.domElement)
       controls.rotateSpeed  = 2.5
@@ -1998,7 +2125,7 @@ export default {
     const animate = () => {
       animFrameId = requestAnimationFrame(animate)
 
-      if (snapAnim) {
+      if (snapAnim && !is2DMode.value) {
         snapAnim.progress = Math.min(snapAnim.progress + 0.07, 1)
         const t = easeInOut(snapAnim.progress)
         camera.position.lerpVectors(snapAnim.startPos, snapAnim.endPos, t)
@@ -2010,7 +2137,7 @@ export default {
         controls.update()
       }
 
-      renderer.render(scene, camera)
+      renderer.render(scene, activeCamera || camera)
       if (showAnnotationBadges.value) updateBadgePositions()
       if (toleranceEntriesRef.value.length > 0) updateToleranceLabelPositions()
     }
@@ -2044,6 +2171,15 @@ export default {
       camera.updateProjectionMatrix()
       renderer.setSize(w, h, false)
       applyViewOffset()
+      if (is2DMode.value && orthoCamera) {
+        const aspect = w / h
+        const s = modelRadius * 1.5
+        orthoCamera.left   = -s * aspect
+        orthoCamera.right  =  s * aspect
+        orthoCamera.top    =  s
+        orthoCamera.bottom = -s
+        orthoCamera.updateProjectionMatrix()
+      }
       for (const o of cornerOverlays) {
         if (o?.material?.resolution) o.material.resolution.set(w, h)
       }
@@ -2069,6 +2205,8 @@ export default {
       removeEdges()
       clearCornerOverlays()
       clearFeatureOverlays()
+      removeDrawingEdges()
+      if (is2DMode.value) exit2DMode()
       facesData          = []
       cornersData        = []
       holeMeshNames      = new Set()
@@ -3031,6 +3169,8 @@ export default {
       rootStyle,
       // Phase 3: badge layer
       showAnnotationBadges, processedAnnotations, showBadgeLabel, showUploadButton, showToleranceButton,
+      // 2D drawing mode
+      is2DMode, current2DView, show2DToggle, toggle2DMode, set2DView,
       // Tolerance mode
       toleranceMode, toleranceEntriesRef,
       showToleranceInput, toleranceInputStyle,
@@ -3249,6 +3389,41 @@ export default {
 
     &:empty {
       display: none;
+    }
+  }
+
+  // ── 2D view axis panel ────────────────────────────────────────────────────────
+  .view2d-panel {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 0;
+    background: #0D0D0D;
+    border-radius: 8px;
+    padding: 4px;
+    z-index: 10;
+  }
+
+  .view2d-btn {
+    height: 28px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: #aaa;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+
+    &:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+    &--active {
+      background: rgba(59, 130, 246, 0.25);
+      color: #3b82f6;
     }
   }
 
