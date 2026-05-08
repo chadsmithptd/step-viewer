@@ -99,11 +99,6 @@
       </button>
     </div>
 
-    <!-- 2D drawing frame + view label -->
-    <div v-if="is2DMode" class="view2d-frame">
-      <span class="view2d-view-label">{{ current2DView.toUpperCase() }} VIEW</span>
-    </div>
-
     <!-- 2D view axis selector -->
     <div v-if="is2DMode" class="view2d-panel">
       <button
@@ -3441,30 +3436,6 @@ export default {
     &:empty {
       display: none;
     }
-  }
-
-  // ── 2D drawing frame + label ─────────────────────────────────────────────────
-  .view2d-frame {
-    position: absolute;
-    inset: 20px;
-    border: 1px solid #b0bec5;
-    pointer-events: none;
-    z-index: 5;
-  }
-
-  .view2d-view-label {
-    position: absolute;
-    bottom: -1px;
-    right: -1px;
-    padding: 3px 8px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    color: #78909c;
-    background: transparent;
-    border-top: 1px solid #b0bec5;
-    border-left: 1px solid #b0bec5;
-    pointer-events: none;
   }
 
   // ── 2D view axis panel ────────────────────────────────────────────────────────
