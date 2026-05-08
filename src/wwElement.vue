@@ -2216,12 +2216,9 @@ export default {
         const partProps = analyzeModelGeometry(box)
         setPartPropertiesVar(partProps)
 
-        // Body of Revolution test — voxel IoU against a 180°-rotated copy
-        const bor = analyzeBodyOfRevolution(mergedCylinders)
-        setBodyOfRevolutionVar(bor)
-
+        // Body of Revolution analysis disabled for performance — see docs/reactivate-body-of-revolution.md
         // ── Phase 1: Build structured feature model ───────────────────────────
-        currentFeatureModel = buildFeatureModel(mergedCylinders, allFaces, cornerResult, bor, partProps.boundingBox)
+        currentFeatureModel = buildFeatureModel(mergedCylinders, allFaces, cornerResult, null, partProps.boundingBox)
         setFeatureModelVar(currentFeatureModel)
         emit('trigger-event', {
           name:  'feature-model-built',
