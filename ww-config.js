@@ -514,6 +514,35 @@ export default {
       /* wwEditor:end */
     },
 
+    drawing2DShowHiddenLines: {
+      label: { en: 'Show Hidden Lines' },
+      type: 'OnOff',
+      section: 'style',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'When on, edges hidden behind the model surface are shown as dashed lines — standard engineering drawing convention.',
+      },
+      /* wwEditor:end */
+    },
+
+    drawing2DHiddenLineColor: {
+      label: { en: '2D Hidden Line Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#7a8fa6',
+      hidden: content => !content?.drawing2DShowHiddenLines,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Color of the dashed hidden lines in 2D drawing mode.',
+      },
+      /* wwEditor:end */
+    },
+
     initialTolerances: {
       hidden: true,
       defaultValue: [],

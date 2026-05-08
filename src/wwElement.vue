@@ -99,6 +99,11 @@
       </button>
     </div>
 
+    <!-- 2D drawing frame + view label -->
+    <div v-if="is2DMode" class="view2d-frame">
+      <span class="view2d-view-label">{{ current2DView.toUpperCase() }} VIEW</span>
+    </div>
+
     <!-- 2D view axis selector -->
     <div v-if="is2DMode" class="view2d-panel">
       <button
@@ -1578,10 +1583,10 @@ export default {
 
     // ─── 2D Drawing mode ─────────────────────────────────────────────────────
     const removeDrawingEdges = () => {
-      for (const l of drawingEdges) {
-        scene?.remove(l)
-        l.geometry.dispose()
-        l.material.dispose()
+      for (const { obj, ownGeo } of drawingEdges) {
+        scene?.remove(obj)
+        if (ownGeo) obj.geometry?.dispose()
+        obj.material?.dispose()
       }
       drawingEdges = []
     }
@@ -1589,17 +1594,63 @@ export default {
     const buildDrawingEdges = () => {
       removeDrawingEdges()
       if (!loadedModel) return
-      const color = new THREE.Color(props.content?.drawing2DLineColor || '#1a1a1a')
-      const mat   = new THREE.LineBasicMaterial({ color, depthTest: false })
+
+      const lineColor   = new THREE.Color(props.content?.drawing2DLineColor        || '#1a1a1a')
+      const hiddenColor = new THREE.Color(props.content?.drawing2DHiddenLineColor   || '#7a8fa6')
+      const showHidden  = props.content?.drawing2DShowHiddenLines !== false
+
       for (const mesh of clickableMeshes) {
         mesh.updateWorldMatrix(true, false)
+
+        // Invisible depth-prepass mesh — fills the depth buffer so visible-line
+        // depth testing works correctly against the model surface
+        const depthMat  = new THREE.MeshBasicMaterial({ colorWrite: false })
+        const depthMesh = new THREE.Mesh(mesh.geometry, depthMat)
+        depthMesh.matrixAutoUpdate = false
+        depthMesh.matrix.copy(mesh.matrixWorld)
+        depthMesh.renderOrder = 0
+        scene.add(depthMesh)
+        drawingEdges.push({ obj: depthMesh, ownGeo: false })
+
         const edgesGeo = new THREE.EdgesGeometry(mesh.geometry, 15)
-        const lines    = new THREE.LineSegments(edgesGeo, mat.clone())
-        lines.matrixAutoUpdate = false
-        lines.matrix.copy(mesh.matrixWorld)
-        lines.renderOrder = 2
-        scene.add(lines)
-        drawingEdges.push(lines)
+
+        if (showHidden) {
+          // Hidden lines — dashed, faint, no depth test so they show through surfaces
+          const hiddenMat   = new THREE.LineDashedMaterial({
+            color:       hiddenColor,
+            dashSize:    1.5,
+            gapSize:     1.5,
+            opacity:     0.28,
+            transparent: true,
+            depthTest:   false,
+          })
+          const hiddenLines = new THREE.LineSegments(edgesGeo, hiddenMat)
+          hiddenLines.computeLineDistances()
+          hiddenLines.matrixAutoUpdate = false
+          hiddenLines.matrix.copy(mesh.matrixWorld)
+          hiddenLines.renderOrder = 1
+          scene.add(hiddenLines)
+          drawingEdges.push({ obj: hiddenLines, ownGeo: true })
+
+          // Visible lines — solid, depth tested, renders over hidden pass
+          const visGeo   = edgesGeo.clone()
+          const visMat   = new THREE.LineBasicMaterial({ color: lineColor, depthTest: true })
+          const visLines = new THREE.LineSegments(visGeo, visMat)
+          visLines.matrixAutoUpdate = false
+          visLines.matrix.copy(mesh.matrixWorld)
+          visLines.renderOrder = 2
+          scene.add(visLines)
+          drawingEdges.push({ obj: visLines, ownGeo: true })
+        } else {
+          // Visible lines only
+          const visMat   = new THREE.LineBasicMaterial({ color: lineColor, depthTest: true })
+          const visLines = new THREE.LineSegments(edgesGeo, visMat)
+          visLines.matrixAutoUpdate = false
+          visLines.matrix.copy(mesh.matrixWorld)
+          visLines.renderOrder = 2
+          scene.add(visLines)
+          drawingEdges.push({ obj: visLines, ownGeo: true })
+        }
       }
     }
 
@@ -3390,6 +3441,30 @@ export default {
     &:empty {
       display: none;
     }
+  }
+
+  // ── 2D drawing frame + label ─────────────────────────────────────────────────
+  .view2d-frame {
+    position: absolute;
+    inset: 20px;
+    border: 1px solid #b0bec5;
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  .view2d-view-label {
+    position: absolute;
+    bottom: -1px;
+    right: -1px;
+    padding: 3px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: #78909c;
+    background: transparent;
+    border-top: 1px solid #b0bec5;
+    border-left: 1px solid #b0bec5;
+    pointer-events: none;
   }
 
   // ── 2D view axis panel ────────────────────────────────────────────────────────
