@@ -798,6 +798,38 @@ export default {
       const round   = v => Math.round(v * 1000) / 1000
       const results = []
 
+      // Reusable vectors for surface-area calculation (avoids GC churn per triangle)
+      const _sv0 = new THREE.Vector3()
+      const _sv1 = new THREE.Vector3()
+      const _sv2 = new THREE.Vector3()
+      const _se1 = new THREE.Vector3()
+      const _se2 = new THREE.Vector3()
+      const _scr = new THREE.Vector3()
+
+      const computeGroupArea = (mesh, group) => {
+        const geo = mesh.geometry
+        const pos = geo.attributes.position
+        const idx = geo.index
+        if (!pos) return 0
+        mesh.updateWorldMatrix(true, false)
+        const wm       = mesh.matrixWorld
+        const triStart = group.start / 3
+        const triEnd   = triStart + group.count / 3
+        let area = 0
+        for (let t = triStart; t < triEnd; t++) {
+          const i0 = idx ? idx.getX(t * 3)     : t * 3
+          const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1
+          const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2
+          _sv0.set(pos.getX(i0), pos.getY(i0), pos.getZ(i0)).applyMatrix4(wm)
+          _sv1.set(pos.getX(i1), pos.getY(i1), pos.getZ(i1)).applyMatrix4(wm)
+          _sv2.set(pos.getX(i2), pos.getY(i2), pos.getZ(i2)).applyMatrix4(wm)
+          _se1.subVectors(_sv1, _sv0)
+          _se2.subVectors(_sv2, _sv0)
+          area += _scr.crossVectors(_se1, _se2).length() * 0.5
+        }
+        return area
+      }
+
       for (const mesh of clickableMeshes) {
         const geo = mesh.geometry
         if (!geo?.attributes?.position) continue
@@ -831,7 +863,8 @@ export default {
             }
           }
 
-          const c = result._centroid
+          const c           = result._centroid
+          const faceSurface = computeGroupArea(mesh, group)
           results.push({
             meshName:      mesh.name || '',
             objectName:    mesh.parent?.name || mesh.name || '',
@@ -846,6 +879,7 @@ export default {
             is360:         result.is360      ?? null,
             axis:          result.axis       ?? null,
             center:        c ? { x: round(c.x), y: round(c.y), z: round(c.z) } : null,
+            surfaceArea:   Math.round(faceSurface * 1000) / 1000,
             isConcave,
             isHole,
             merged:        false,
@@ -2470,12 +2504,20 @@ export default {
         holeMeshArray = clickableMeshes.filter(m => holeMeshNames.has(m.name))
         setFacesVar(allFaces)
 
-        const faceTypeCounts = allFaces.reduce((acc, f) => {
+        const round2 = v => Math.round(v * 100) / 100
+        const byType = allFaces.reduce((acc, f) => {
           const t = f.faceType || 'unknown'
-          acc[t] = (acc[t] || 0) + 1
+          if (!acc[t]) acc[t] = { count: 0, surfaceArea: 0 }
+          acc[t].count++
+          acc[t].surfaceArea += f.surfaceArea ?? 0
           return acc
         }, {})
-        setFacesSummaryVar({ total: allFaces.length, ...faceTypeCounts })
+        const totalArea = allFaces.reduce((s, f) => s + (f.surfaceArea ?? 0), 0)
+        Object.values(byType).forEach(b => {
+          b.surfaceArea  = round2(b.surfaceArea)
+          b.areaPercent  = totalArea > 0 ? round2((b.surfaceArea / totalArea) * 100) : 0
+        })
+        setFacesSummaryVar({ total: allFaces.length, totalSurfaceArea: round2(totalArea), byType })
 
         // Sharp corner detection disabled for performance — see docs/reactivate-sharp-corners.md
         const cornerResult = null
