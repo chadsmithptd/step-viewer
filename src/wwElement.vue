@@ -285,6 +285,16 @@ export default {
       : null
     const setFacesVar = (val) => _wwFacesVar?.setValue?.(val)
 
+    const _wwFacesSummaryVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({
+          uid:          props.uid,
+          name:         'facesSummary',
+          type:         'object',
+          defaultValue: null,
+        })
+      : null
+    const setFacesSummaryVar = (val) => _wwFacesSummaryVar?.setValue?.(val)
+
     const _wwBoRVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
       ? wwLib.wwVariable.useComponentVariable({
           uid:          props.uid,
@@ -2459,6 +2469,13 @@ export default {
         }
         holeMeshArray = clickableMeshes.filter(m => holeMeshNames.has(m.name))
         setFacesVar(allFaces)
+
+        const faceTypeCounts = allFaces.reduce((acc, f) => {
+          const t = f.faceType || 'unknown'
+          acc[t] = (acc[t] || 0) + 1
+          return acc
+        }, {})
+        setFacesSummaryVar({ total: allFaces.length, ...faceTypeCounts })
 
         // Sharp corner detection disabled for performance — see docs/reactivate-sharp-corners.md
         const cornerResult = null
