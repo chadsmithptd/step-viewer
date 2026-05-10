@@ -2496,7 +2496,7 @@ export default {
         facesData = allFaces
         holeMeshNames = new Set()
         for (const face of facesData) {
-          if ((face.arcDeg ?? 0) >= 350) {
+          if ((face.arcDeg ?? 0) >= 350 && face.isConcave === true) {
             if (Array.isArray(face.meshNames)) face.meshNames.forEach(n => holeMeshNames.add(n))
             else if (face.meshName) holeMeshNames.add(face.meshName)
           }
