@@ -740,7 +740,7 @@ export default {
       scene.add(bboxHelper)
 
       const size = box.getSize(new THREE.Vector3())
-      const round = v => Math.round(v * 100) / 100
+      const toIn = v => (Math.round((v / 25.4) * 1000) / 1000).toFixed(3) + '"'
       const cx = (box.min.x + box.max.x) / 2
       const cy = (box.min.y + box.max.y) / 2
       const cz = (box.min.z + box.max.z) / 2
@@ -749,9 +749,9 @@ export default {
       const oz = size.z * 0.12
 
       bboxLabelPoints = [
-        { point: new THREE.Vector3(cx, box.min.y - oy, box.min.z - oz), text: `${round(size.x)}`, axis: 'w' },
-        { point: new THREE.Vector3(box.max.x + ox, cy, box.min.z - oz), text: `${round(size.y)}`, axis: 'h' },
-        { point: new THREE.Vector3(box.max.x + ox, box.min.y - oy, cz), text: `${round(size.z)}`, axis: 'd' },
+        { point: new THREE.Vector3(cx, box.min.y - oy, box.min.z - oz), text: toIn(size.x), axis: 'w' },
+        { point: new THREE.Vector3(box.max.x + ox, cy, box.min.z - oz), text: toIn(size.y), axis: 'h' },
+        { point: new THREE.Vector3(box.max.x + ox, box.min.y - oy, cz), text: toIn(size.z), axis: 'd' },
       ]
       bboxLabelsRef.value = bboxLabelPoints.map(p => ({ text: p.text, axis: p.axis }))
     }
