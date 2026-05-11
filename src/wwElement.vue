@@ -1038,14 +1038,23 @@ export default {
         if (group.length === 1) { merged.push(base); continue }
 
         // ── Merge the group ────────────────────────────────────────────────
-        const members   = group.map(idx => cylinders[idx])
-        const totalArc  = Math.min(360, members.reduce((s, m) => s + (m.arcDeg || 0), 0))
-        const avgDiam   = round(members.reduce((s, m) => s + (m.diameter || 0), 0) / members.length)
+        const members  = group.map(idx => cylinders[idx])
+        const totalArc = Math.min(360, members.reduce((s, m) => s + (m.arcDeg || 0), 0))
 
-        // Axial extent: project each center along axis ± half its own depth
+        // Bug 3 fix: average all members' canonical axes instead of keeping only base's.
+        const axSum = { x: 0, y: 0, z: 0 }
+        for (const m of members) {
+          if (!m.axis) continue
+          const ca = canonAxis(m.axis)
+          axSum.x += ca.x; axSum.y += ca.y; axSum.z += ca.z
+        }
+        const axLen = Math.sqrt(axSum.x**2 + axSum.y**2 + axSum.z**2) || 1
+        const mergedAxisRaw = { x: axSum.x / axLen, y: axSum.y / axLen, z: axSum.z / axLen }
+
+        // Axial extent: project each center along merged axis ± half its own depth
         const axialVals = members.flatMap(m => {
           if (!m.center) return []
-          const t = m.center.x*normAx.x + m.center.y*normAx.y + m.center.z*normAx.z
+          const t = m.center.x*mergedAxisRaw.x + m.center.y*mergedAxisRaw.y + m.center.z*mergedAxisRaw.z
           const h = (m.depth || 0) / 2
           return [t - h, t + h]
         })
@@ -1053,12 +1062,44 @@ export default {
           ? round(Math.max(...axialVals) - Math.min(...axialVals))
           : base.depth
 
+        // Unrounded center used internally for the radius correction below.
         const valid = members.filter(m => m.center)
-        const mergedCenter = valid.length ? {
-          x: round(valid.reduce((s, m) => s + m.center.x, 0) / valid.length),
-          y: round(valid.reduce((s, m) => s + m.center.y, 0) / valid.length),
-          z: round(valid.reduce((s, m) => s + m.center.z, 0) / valid.length),
-        } : base.center
+        const mcRaw = valid.length ? {
+          x: valid.reduce((s, m) => s + m.center.x, 0) / valid.length,
+          y: valid.reduce((s, m) => s + m.center.y, 0) / valid.length,
+          z: valid.reduce((s, m) => s + m.center.z, 0) / valid.length,
+        } : null
+        const mergedCenter = mcRaw
+          ? { x: round(mcRaw.x), y: round(mcRaw.y), z: round(mcRaw.z) }
+          : base.center
+
+        // Bug 1 fix: correct the diameter for partial-arc bias.
+        // Each piece's radius was measured from its own face centroid, which sits
+        // 2·sin(α/2)/α × R_true away from the cylinder axis for an arc of α radians.
+        // After merging, mcRaw ≈ the true axis center (opposite offsets cancel for
+        // symmetric splits), so we can invert: R_true = radialDist / factor.
+        const correctedRadii = valid.map(m => {
+          const alpha  = m.arcDeg > 0 && m.arcDeg < 340 ? m.arcDeg * Math.PI / 180 : null
+          const factor = alpha ? (2 * Math.sin(alpha / 2)) / alpha : 0
+          if (!mcRaw || factor < 0.05) return (m.diameter || 0) / 2
+          const ref = mcRaw
+          const dx = m.center.x - ref.x
+          const dy = m.center.y - ref.y
+          const dz = m.center.z - ref.z
+          const proj = dx*mergedAxisRaw.x + dy*mergedAxisRaw.y + dz*mergedAxisRaw.z
+          const radialDist = Math.sqrt(
+            (dx - proj*mergedAxisRaw.x)**2 +
+            (dy - proj*mergedAxisRaw.y)**2 +
+            (dz - proj*mergedAxisRaw.z)**2
+          )
+          // Sanity check: if offset is negligibly small the pieces are nearly centred
+          // (e.g. very large arc), fall back to the biased value.
+          if (radialDist < (m.diameter || 0) * factor * 0.1) return (m.diameter || 0) / 2
+          return radialDist / factor
+        })
+        const correctedDiam = correctedRadii.length
+          ? round(2 * correctedRadii.reduce((s, r) => s + r, 0) / correctedRadii.length)
+          : round(members.reduce((s, m) => s + (m.diameter || 0), 0) / members.length)
 
         // A merged group is a hole when every piece is concave AND combined
         // arc ≥ 300°. Previously this checked `isHole !== false`, but split
@@ -1073,12 +1114,12 @@ export default {
           faceType:    'cylindrical',
           surfaceType: 'Cylinder',
           shape:       null,
-          diameter:    avgDiam,
+          diameter:    correctedDiam,
           depth:       mergedDepth,
           halfAngle:   null,
           arcDeg:      totalArc,
           is360:       totalArc >= 300,
-          axis:        { x: round(normAx.x), y: round(normAx.y), z: round(normAx.z) },
+          axis:        { x: round(mergedAxisRaw.x), y: round(mergedAxisRaw.y), z: round(mergedAxisRaw.z) },
           center:      mergedCenter,
           isConcave:   allConcave,
           isHole:      isMergedHole,
