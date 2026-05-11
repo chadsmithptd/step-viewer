@@ -2603,11 +2603,19 @@ export default {
         const otherFaces       = rawFaces.filter(f => f.surfaceType !== 'Cylinder')
         const mergedCylinders  = mergeCylinders(cylindricalFaces)
         detectCounterbores(mergedCylinders)
+        // Tag shallow concave cylinders (L/D < 0.5) as pockets; counterbores are excluded.
+        for (const c of mergedCylinders) {
+          c.isPocket = c.isHole === true && !c.isCounterbore &&
+                       c.diameter > 0 && c.depth != null &&
+                       (c.depth / c.diameter) < 0.5
+        }
         const allFaces         = [...otherFaces, ...mergedCylinders]
         facesData = allFaces
         holeMeshNames = new Set()
         for (const face of facesData) {
-          if ((face.arcDeg ?? 0) >= 350 && face.isConcave === true) {
+          // Only true holes (not counterbores or pockets) get dark-colour treatment
+          if ((face.arcDeg ?? 0) >= 350 && face.isConcave === true &&
+              !face.isCounterbore && !face.isPocket) {
             if (Array.isArray(face.meshNames)) face.meshNames.forEach(n => holeMeshNames.add(n))
             else if (face.meshName) holeMeshNames.add(face.meshName)
           }
@@ -2633,12 +2641,13 @@ export default {
         // Sharp corner detection disabled for performance — see docs/reactivate-sharp-corners.md
         const cornerResult = null
 
-        const holeCount        = mergedCylinders.filter(c => c.isHole === true && !c.isCounterbore).length
+        const holeCount        = mergedCylinders.filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket).length
         const counterboreCount = mergedCylinders.filter(c => c.isHole === true &&  c.isCounterbore).length
+        const pocketCount      = mergedCylinders.filter(c => c.isPocket === true).length
         const bossCount        = mergedCylinders.filter(c => c.isHole === false).length
         emit('trigger-event', {
           name:  'holes-detected',
-          event: { cylinders: mergedCylinders, holeCount, counterboreCount, bossCount },
+          event: { cylinders: mergedCylinders, holeCount, counterboreCount, pocketCount, bossCount },
         })
 
         // Compute surface area, volume, and bounding box
@@ -2988,12 +2997,16 @@ export default {
       })
 
       const holes = mergedCylinders
-        .filter(c => c.isHole === true && !c.isCounterbore)
+        .filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket)
         .map((c, i) => mapHole(c, i, 'hole'))
 
       const counterbores = mergedCylinders
         .filter(c => c.isHole === true && c.isCounterbore)
         .map((c, i) => mapHole(c, i, 'counterbore'))
+
+      const pockets = mergedCylinders
+        .filter(c => c.isPocket === true)
+        .map((c, i) => mapHole(c, i, 'pocket'))
 
       const bosses = mergedCylinders
         .filter(c => c.isHole === false && c.isConcave === false)
@@ -3043,6 +3056,7 @@ export default {
       return {
         holes,
         counterbores,
+        pockets,
         bosses,
         planes,
         cones,
@@ -3057,6 +3071,7 @@ export default {
         summary: {
           holeCount:          holes.length,
           counterboreCount:   counterbores.length,
+          pocketCount:        pockets.length,
           bossCount:          bosses.length,
           planeCount:         planes.length,
           coneCount:          cones.length,

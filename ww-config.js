@@ -851,10 +851,11 @@ export default {
       name: 'holes-detected',
       label: { en: 'On Holes Detected' },
       event: {
-        cylinders:       [],  // all cylindrical faces — each has meshName, objectName, diameter, depth, axis, center, isHole, isCounterbore
-        holeCount:       0,   // concave cylinders (bores, holes) — excludes counterbores
-        counterboreCount: 0,  // concave cylinders identified as counterbores
-        bossCount:       0,   // convex cylinders (pins, bosses)
+        cylinders:        [],  // all cylindrical faces — each has meshName, objectName, diameter, depth, axis, center, isHole, isCounterbore, isPocket
+        holeCount:        0,   // concave cylinders (bores/holes) — excludes counterbores and pockets
+        counterboreCount: 0,   // concave cylinders identified as counterbores
+        pocketCount:      0,   // concave cylinders with L/D < 0.5 (wide, shallow)
+        bossCount:        0,   // convex cylinders (pins, bosses)
       },
     },
     {
@@ -883,6 +884,7 @@ export default {
       event: {
         holeCount:          0,
         counterboreCount:   0,
+        pocketCount:        0,
         bossCount:          0,
         planeCount:         0,
         coneCount:          0,
