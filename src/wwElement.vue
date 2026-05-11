@@ -406,6 +406,7 @@ export default {
     let drawing2DLineMats = []   // LineMaterial instances that need resolution updates on resize
 
     let bboxHelper        = null
+    let bboxLineMat       = null // LineMaterial for the bbox — needs resolution updates on resize
     let bboxLabelPoints   = []   // [{point: THREE.Vector3, text: string, axis: string}]
     let currentBbox       = null // THREE.Box3 stored on load for rebuilding
 
@@ -699,7 +700,8 @@ export default {
 
     // ─── Bounding box visualization ───────────────────────────────────────────
     const clearBoundingBox = () => {
-      if (bboxHelper && scene) { scene.remove(bboxHelper); bboxHelper.geometry?.dispose(); bboxHelper.material?.dispose(); bboxHelper = null }
+      if (bboxHelper && scene) { scene.remove(bboxHelper); bboxHelper.geometry?.dispose(); bboxHelper = null }
+      if (bboxLineMat) { bboxLineMat.dispose(); bboxLineMat = null }
       bboxLabelPoints = []
       bboxLabelsRef.value = []
     }
@@ -707,10 +709,35 @@ export default {
     const buildBoundingBox = (box) => {
       clearBoundingBox()
       if (!scene || !box) return
-      const color = new THREE.Color(props.content?.bboxColor || '#00e5ff')
-      bboxHelper = new THREE.Box3Helper(box, color)
-      bboxHelper.material.transparent = true
-      bboxHelper.material.opacity = 0.6
+
+      const { min, max } = box
+      const positions = [
+        min.x,min.y,min.z,  max.x,min.y,min.z,
+        max.x,min.y,min.z,  max.x,min.y,max.z,
+        max.x,min.y,max.z,  min.x,min.y,max.z,
+        min.x,min.y,max.z,  min.x,min.y,min.z,
+        min.x,max.y,min.z,  max.x,max.y,min.z,
+        max.x,max.y,min.z,  max.x,max.y,max.z,
+        max.x,max.y,max.z,  min.x,max.y,max.z,
+        min.x,max.y,max.z,  min.x,max.y,min.z,
+        min.x,min.y,min.z,  min.x,max.y,min.z,
+        max.x,min.y,min.z,  max.x,max.y,min.z,
+        max.x,min.y,max.z,  max.x,max.y,max.z,
+        min.x,min.y,max.z,  min.x,max.y,max.z,
+      ]
+      const w = renderer?.domElement.clientWidth  || 400
+      const h = renderer?.domElement.clientHeight || 300
+      const geo = new LineSegmentsGeometry()
+      geo.setPositions(positions)
+      bboxLineMat = new LineMaterial({
+        color:       new THREE.Color(props.content?.bboxColor || '#00e5ff'),
+        linewidth:   2.5,
+        resolution:  new THREE.Vector2(w, h),
+        transparent: true,
+        opacity:     0.75,
+        depthTest:   false,
+      })
+      bboxHelper = new LineSegments2(geo, bboxLineMat)
       bboxHelper.renderOrder = 2
       scene.add(bboxHelper)
 
@@ -2400,6 +2427,7 @@ export default {
       for (const o of cornerOverlays) {
         if (o?.material?.resolution) o.material.resolution.set(w, h)
       }
+      if (bboxLineMat) bboxLineMat.resolution.set(w, h)
     }
 
     // ─── Model loading ────────────────────────────────────────────────────────
@@ -3131,7 +3159,7 @@ export default {
     })
 
     watch(() => props.content?.bboxColor, (color) => {
-      if (bboxHelper) bboxHelper.material.color.set(color || '#00e5ff')
+      if (bboxLineMat) bboxLineMat.color.set(color || '#00e5ff')
     })
 
     watch(() => props.content?.showEdges, () => {
@@ -3631,17 +3659,15 @@ export default {
       position: absolute;
       display: flex;
       align-items: center;
-      gap: 4px;
-      background: color-mix(in srgb, var(--bbox-color, #00e5ff) 12%, transparent);
-      border: 1px solid color-mix(in srgb, var(--bbox-color, #00e5ff) 40%, transparent);
+      gap: 5px;
+      background: var(--bbox-color, #00e5ff);
       border-radius: 4px;
-      padding: 2px 7px;
-      backdrop-filter: blur(4px);
+      padding: 2px 8px;
 
       .bbox-dim-axis {
         font-size: 9px;
         font-weight: 700;
-        color: color-mix(in srgb, var(--bbox-color, #00e5ff) 70%, white);
+        color: rgba(255, 255, 255, 0.65);
         font-family: monospace;
         letter-spacing: 0.05em;
       }
@@ -3649,7 +3675,7 @@ export default {
       .bbox-dim-value {
         font-size: 11px;
         font-weight: 600;
-        color: color-mix(in srgb, var(--bbox-color, #00e5ff) 20%, white);
+        color: #ffffff;
         font-family: monospace;
       }
     }
