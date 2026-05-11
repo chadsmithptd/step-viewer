@@ -2644,14 +2644,13 @@ export default {
         // Sharp corner detection disabled for performance — see docs/reactivate-sharp-corners.md
         const cornerResult = null
 
-        const holeCount         = mergedCylinders.filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket && !c.isThrough).length
-        const throughHoleCount  = mergedCylinders.filter(c => c.isHole === true && c.isThrough && !c.isCounterbore).length
-        const counterboreCount  = mergedCylinders.filter(c => c.isCounterbore === true).length
-        const pocketCount       = mergedCylinders.filter(c => c.isPocket === true).length
-        const bossCount         = mergedCylinders.filter(c => c.isHole === false).length
+        const holeCount        = mergedCylinders.filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket).length
+        const counterboreCount = mergedCylinders.filter(c => c.isCounterbore === true).length
+        const pocketCount      = mergedCylinders.filter(c => c.isPocket === true).length
+        const bossCount        = mergedCylinders.filter(c => c.isHole === false).length
         emit('trigger-event', {
           name:  'holes-detected',
-          event: { cylinders: mergedCylinders, holeCount, throughHoleCount, counterboreCount, pocketCount, bossCount },
+          event: { cylinders: mergedCylinders, holeCount, counterboreCount, pocketCount, bossCount },
         })
 
         // Compute surface area, volume, and bounding box
@@ -3039,6 +3038,7 @@ export default {
         axis:      c.axis,
         center:    c.center,
         arcDeg:    c.arcDeg,
+        isThrough: c.isThrough === true,
         meshName:  c.meshName,
         meshNames: c.meshNames || [c.meshName].filter(Boolean),
         tolerance: null,
@@ -3046,12 +3046,8 @@ export default {
       })
 
       const holes = mergedCylinders
-        .filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket && !c.isThrough)
+        .filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket)
         .map((c, i) => mapHole(c, i, 'hole'))
-
-      const throughHoles = mergedCylinders
-        .filter(c => c.isHole === true && c.isThrough === true && !c.isCounterbore)
-        .map((c, i) => mapHole(c, i, 'through'))
 
       const counterbores = mergedCylinders
         .filter(c => c.isCounterbore === true)
@@ -3108,7 +3104,6 @@ export default {
 
       return {
         holes,
-        throughHoles,
         counterbores,
         pockets,
         bosses,
@@ -3124,7 +3119,6 @@ export default {
         } : null,
         summary: {
           holeCount:          holes.length,
-          throughHoleCount:   throughHoles.length,
           counterboreCount:   counterbores.length,
           pocketCount:        pockets.length,
           bossCount:          bosses.length,
