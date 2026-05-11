@@ -730,15 +730,13 @@ export default {
       const geo = new LineSegmentsGeometry()
       geo.setPositions(positions)
       bboxLineMat = new LineMaterial({
-        color:       new THREE.Color(props.content?.bboxColor || '#00e5ff'),
-        linewidth:   2.5,
-        resolution:  new THREE.Vector2(w, h),
+        color:      new THREE.Color(props.content?.bboxColor || '#00e5ff'),
+        linewidth:  2.5,
+        resolution: new THREE.Vector2(w, h),
         transparent: true,
-        opacity:     0.75,
-        depthTest:   false,
+        opacity:    0.75,
       })
       bboxHelper = new LineSegments2(geo, bboxLineMat)
-      bboxHelper.renderOrder = 2
       scene.add(bboxHelper)
 
       const size = box.getSize(new THREE.Vector3())
