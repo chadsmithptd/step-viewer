@@ -486,6 +486,34 @@ export default {
       /* wwEditor:end */
     },
 
+    showBoundingBoxButton: {
+      label: { en: 'Show Bounding Box Button' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Show or hide the bounding box dimension toggle button in the left controls panel.',
+      },
+      /* wwEditor:end */
+    },
+
+    bboxColor: {
+      label: { en: 'Bounding Box Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#00e5ff',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Color of the bounding box wireframe and dimension labels.',
+      },
+      /* wwEditor:end */
+    },
+
     drawing2DLineColor: {
       label: { en: '2D Line Color' },
       type: 'Color',

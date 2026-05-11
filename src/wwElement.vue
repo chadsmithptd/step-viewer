@@ -89,6 +89,11 @@
         </svg>
       </button>
       <button v-if="show2DToggle && modelLoaded" class="ctrl-btn ctrl-btn--2d" :class="{ 'ctrl-btn--active': is2DMode }" title="2D Drawing View" @click="toggle2DMode">2D</button>
+      <button v-if="showBoundingBoxButton && modelLoaded" class="ctrl-btn" :class="{ 'ctrl-btn--active': showBoundingBox }" title="Bounding Box Dimensions" @click="toggleBoundingBox">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+        </svg>
+      </button>
     </div>
 
     <!-- 2D view axis selector -->
@@ -145,6 +150,14 @@
       <div class="tol-actions">
         <button class="tol-btn-cancel" @click="cancelTolerance">Cancel</button>
         <button class="tol-btn-confirm" @click="confirmTolerance">Add</button>
+      </div>
+    </div>
+
+    <!-- Bounding box dimension label layer -->
+    <div v-if="showBoundingBox && modelLoaded" ref="bboxLabelContainerRef" class="bbox-label-layer" aria-hidden="true">
+      <div v-for="(lbl, i) in bboxLabelsRef" :key="i" class="bbox-dim-label" :class="`bbox-dim-label--${lbl.axis}`">
+        <span class="bbox-dim-axis">{{ lbl.axis.toUpperCase() }}</span>
+        <span class="bbox-dim-value">{{ lbl.text }}</span>
       </div>
     </div>
 
@@ -215,6 +228,7 @@ export default {
     const fileInputRef    = ref(null)
     const badgeContainerRef = ref(null)
     const toleranceLabelContainerRef = ref(null)
+    const bboxLabelContainerRef = ref(null)
 
     // ─── UI state ────────────────────────────────────────────────────────────
     const isLoading      = ref(false)
@@ -224,6 +238,9 @@ export default {
     const libsReady      = ref(false)
     const modelLoaded    = ref(false)
     const isDragging     = ref(false)
+
+    const showBoundingBox          = ref(false)
+    const bboxLabelsRef            = ref([])
 
     const toleranceMode            = ref(false)
     const showToleranceInput       = ref(false)
@@ -429,6 +446,10 @@ export default {
     let silhouetteEdges   = []   // view-dependent outline edges, rebuilt on each set2DView
     let drawing2DLineMats = []   // LineMaterial instances that need resolution updates on resize
 
+    let bboxHelper        = null
+    let bboxLabelPoints   = []   // [{point: THREE.Vector3, text: string, axis: string}]
+    let currentBbox       = null // THREE.Box3 stored on load for rebuilding
+
     // MBD state — plain vars, no Vue reactivity overhead
     let currentFeatureModel = null
     let currentRuleResult   = null
@@ -443,10 +464,11 @@ export default {
       background: props.content?.backgroundColor || 'transparent',
     }))
 
-    const showBadgeLabel      = computed(() => props.content?.showBadgeLabel !== false)
-    const showUploadButton    = computed(() => props.content?.showUploadButton !== false)
-    const showToleranceButton = computed(() => props.content?.showToleranceButton !== false)
-    const show2DToggle        = computed(() => props.content?.show2DToggle !== false)
+    const showBadgeLabel        = computed(() => props.content?.showBadgeLabel !== false)
+    const showUploadButton      = computed(() => props.content?.showUploadButton !== false)
+    const showToleranceButton   = computed(() => props.content?.showToleranceButton !== false)
+    const show2DToggle          = computed(() => props.content?.show2DToggle !== false)
+    const showBoundingBoxButton = computed(() => props.content?.showBoundingBoxButton !== false)
 
     // Resolved annotation array — handles formula field mapping
     const processedAnnotations = computed(() => {
@@ -710,6 +732,62 @@ export default {
     const toggleToleranceMode = () => {
       toleranceMode.value = !toleranceMode.value
       if (!toleranceMode.value) clearPendingTolerance()
+    }
+
+    // ─── Bounding box visualization ───────────────────────────────────────────
+    const clearBoundingBox = () => {
+      if (bboxHelper && scene) { scene.remove(bboxHelper); bboxHelper.geometry?.dispose(); bboxHelper.material?.dispose(); bboxHelper = null }
+      bboxLabelPoints = []
+      bboxLabelsRef.value = []
+    }
+
+    const buildBoundingBox = (box) => {
+      clearBoundingBox()
+      if (!scene || !box) return
+      const color = new THREE.Color(props.content?.bboxColor || '#00e5ff')
+      bboxHelper = new THREE.Box3Helper(box, color)
+      bboxHelper.material.transparent = true
+      bboxHelper.material.opacity = 0.6
+      bboxHelper.renderOrder = 2
+      scene.add(bboxHelper)
+
+      const size = box.getSize(new THREE.Vector3())
+      const round = v => Math.round(v * 100) / 100
+      const cx = (box.min.x + box.max.x) / 2
+      const cy = (box.min.y + box.max.y) / 2
+      const cz = (box.min.z + box.max.z) / 2
+      const ox = size.x * 0.12
+      const oy = size.y * 0.12
+      const oz = size.z * 0.12
+
+      bboxLabelPoints = [
+        { point: new THREE.Vector3(cx, box.min.y - oy, box.min.z - oz), text: `${round(size.x)}`, axis: 'w' },
+        { point: new THREE.Vector3(box.max.x + ox, cy, box.min.z - oz), text: `${round(size.y)}`, axis: 'h' },
+        { point: new THREE.Vector3(box.max.x + ox, box.min.y - oy, cz), text: `${round(size.z)}`, axis: 'd' },
+      ]
+      bboxLabelsRef.value = bboxLabelPoints.map(p => ({ text: p.text, axis: p.axis }))
+    }
+
+    const toggleBoundingBox = () => {
+      showBoundingBox.value = !showBoundingBox.value
+      if (showBoundingBox.value && currentBbox) buildBoundingBox(currentBbox)
+      else clearBoundingBox()
+    }
+
+    const updateBboxLabelPositions = () => {
+      const container = bboxLabelContainerRef.value
+      if (!container || !camera || !renderer || !bboxLabelPoints.length) return
+      const w = renderer.domElement.clientWidth
+      const h = renderer.domElement.clientHeight
+      const els = container.children
+      for (let i = 0; i < els.length && i < bboxLabelPoints.length; i++) {
+        const v = bboxLabelPoints[i].point.clone().project(activeCamera || camera)
+        const x = (v.x *  0.5 + 0.5) * w
+        const y = (v.y * -0.5 + 0.5) * h
+        const visible = v.z < 1 && x >= -60 && x <= w + 60 && y >= -30 && y <= h + 30
+        els[i].style.transform = `translate(calc(${x}px - 50%), calc(${y}px - 50%))`
+        els[i].style.display = visible ? '' : 'none'
+      }
     }
 
     const handleToleranceFaceClick = (hits) => {
@@ -2314,6 +2392,7 @@ export default {
       renderer.render(scene, activeCamera || camera)
       if (showAnnotationBadges.value) updateBadgePositions()
       if (toleranceEntriesRef.value.length > 0) updateToleranceLabelPositions()
+      if (showBoundingBox.value && bboxLabelPoints.length) updateBboxLabelPositions()
     }
 
     // ─── View offset (left/right/top/bottom model centering) ─────────────────
@@ -2377,6 +2456,7 @@ export default {
       clearAnnotationOverlays()
       clearFocusedHoleOverlay()
       clearAllTolerances()
+      clearBoundingBox()
       removeEdges()
       clearCornerOverlays()
       clearFeatureOverlays()
@@ -2422,6 +2502,7 @@ export default {
         else if ((props.content?.modelOpacity ?? 1) < 1) applyModelOpacity(props.content.modelOpacity)
 
         const box    = new THREE.Box3().setFromObject(loadedModel, true)
+        currentBbox  = box
         const center = box.getCenter(new THREE.Vector3())
         const size   = box.getSize(new THREE.Vector3())
         const maxDim = Math.max(size.x, size.y, size.z)
@@ -2561,6 +2642,8 @@ export default {
 
         // ── Phase 2: Build feature overlays (violation-aware) ─────────────────
         buildFeatureOverlays()
+
+        if (showBoundingBox.value) buildBoundingBox(box)
 
         emit('trigger-event', {
           name: 'model-loaded',
@@ -3214,6 +3297,10 @@ export default {
         .forEach(a => a.overlay?.material?.color?.set(color || '#ffffff'))
     })
 
+    watch(() => props.content?.bboxColor, (color) => {
+      if (bboxHelper) bboxHelper.material.color.set(color || '#00e5ff')
+    })
+
     watch(() => props.content?.showEdges, () => {
       if (libsReady.value && loadedModel) buildEdges()
     })
@@ -3343,6 +3430,7 @@ export default {
       currentFeatureModel = null
       currentRuleResult   = null
       removeEdges()
+      clearBoundingBox()
       overrideMaterials.forEach(m => m.dispose())
       overrideMaterials = []
       if (loadedModel) disposeObject(loadedModel)
@@ -3352,7 +3440,7 @@ export default {
     return {
       // DOM
       rootRef, canvasRef, fileInputRef, badgeContainerRef,
-      toleranceLabelContainerRef,
+      toleranceLabelContainerRef, bboxLabelContainerRef,
       content: props.content,
       // UI
       isLoading, loadingMsg, errorMsg, selectionLabel, libsReady,
@@ -3367,6 +3455,8 @@ export default {
       showToleranceInput, toleranceInputStyle,
       tolerancePendingNominal, tolerancePendingPlus, tolerancePendingMinus,
       toggleToleranceMode, confirmTolerance, cancelTolerance: clearPendingTolerance, removeToleranceEntry,
+      // Bounding box
+      showBoundingBox, showBoundingBoxButton, bboxLabelsRef, toggleBoundingBox,
       // Handlers
       onPointerDown, onCanvasClick,
       resetCamera, rotateLeft, rotateRight,
@@ -3715,6 +3805,41 @@ export default {
         background: #3b82f6;
         color: #fff;
         &:hover { background: #2563eb; }
+      }
+    }
+  }
+
+  // ── Bounding box dimension labels ─────────────────────────────────────────
+  .bbox-label-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: visible;
+
+    .bbox-dim-label {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(0, 229, 255, 0.12);
+      border: 1px solid rgba(0, 229, 255, 0.4);
+      border-radius: 4px;
+      padding: 2px 7px;
+      backdrop-filter: blur(4px);
+
+      .bbox-dim-axis {
+        font-size: 9px;
+        font-weight: 700;
+        color: rgba(0, 229, 255, 0.7);
+        font-family: monospace;
+        letter-spacing: 0.05em;
+      }
+
+      .bbox-dim-value {
+        font-size: 11px;
+        font-weight: 600;
+        color: #e0f7fa;
+        font-family: monospace;
       }
     }
   }
