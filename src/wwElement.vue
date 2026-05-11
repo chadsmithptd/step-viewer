@@ -343,47 +343,6 @@ export default {
       : null
     const setFeatureModelVar = (val) => _wwFeatureModelVar?.setValue?.(val)
 
-    // Phase 4 — rule evaluation outputs
-    const _wwRuleViolationsVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
-      ? wwLib.wwVariable.useComponentVariable({
-          uid:          props.uid,
-          name:         'ruleViolations',
-          type:         'array',
-          defaultValue: [],
-        })
-      : null
-    const setRuleViolationsVar = (val) => _wwRuleViolationsVar?.setValue?.(val)
-
-    const _wwRuleWarningsVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
-      ? wwLib.wwVariable.useComponentVariable({
-          uid:          props.uid,
-          name:         'ruleWarnings',
-          type:         'array',
-          defaultValue: [],
-        })
-      : null
-    const setRuleWarningsVar = (val) => _wwRuleWarningsVar?.setValue?.(val)
-
-    const _wwDesignScoreVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
-      ? wwLib.wwVariable.useComponentVariable({
-          uid:          props.uid,
-          name:         'designScore',
-          type:         'number',
-          defaultValue: 100,
-        })
-      : null
-    const setDesignScoreVar = (val) => _wwDesignScoreVar?.setValue?.(val)
-
-    const _wwViolationCountVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
-      ? wwLib.wwVariable.useComponentVariable({
-          uid:          props.uid,
-          name:         'violationCount',
-          type:         'number',
-          defaultValue: 0,
-        })
-      : null
-    const setViolationCountVar = (val) => _wwViolationCountVar?.setValue?.(val)
-
     const _wwToleranceVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
       ? wwLib.wwVariable.useComponentVariable({ uid: props.uid, name: 'toleranceEntries', type: 'array', defaultValue: [] })
       : null
@@ -452,7 +411,6 @@ export default {
 
     // MBD state — plain vars, no Vue reactivity overhead
     let currentFeatureModel = null
-    let currentRuleResult   = null
     let featureOverlayMap   = new Map()
 
     // ─── Computed ─────────────────────────────────────────────────────────────
@@ -462,6 +420,11 @@ export default {
       position:   'relative',
       overflow:   'hidden',
       background: props.content?.backgroundColor || 'transparent',
+      '--ctrl-panel-bg':          props.content?.controlsPanelBg       || '#0D0D0D',
+      '--ctrl-btn-color':         props.content?.controlsBtnColor       || '#ffffff',
+      '--ctrl-btn-active-bg':     props.content?.controlsBtnActiveBg    || 'rgba(59,130,246,0.25)',
+      '--ctrl-btn-active-color':  props.content?.controlsBtnActiveColor || '#3b82f6',
+      '--bbox-color':             props.content?.bboxColor              || '#00e5ff',
     }))
 
     const showBadgeLabel        = computed(() => props.content?.showBadgeLabel !== false)
@@ -2467,7 +2430,6 @@ export default {
       holeMeshNames      = new Set()
       holeMeshArray      = []
       currentFeatureModel = null
-      currentRuleResult   = null
 
       try {
         const loader = new GLTFLoader()
@@ -2623,24 +2585,7 @@ export default {
           event: { ...currentFeatureModel.summary },
         })
 
-        // ── Phase 4: Evaluate design rules against the feature model ──────────
-        currentRuleResult = evaluateDesignRules(currentFeatureModel, props.content?.designRules)
-        setRuleViolationsVar(currentRuleResult.violations)
-        setRuleWarningsVar(currentRuleResult.warnings)
-        setDesignScoreVar(currentRuleResult.score)
-        setViolationCountVar(currentRuleResult.violationCount)
-        emit('trigger-event', {
-          name:  'rules-evaluated',
-          event: {
-            passed:         currentRuleResult.passed,
-            violations:     currentRuleResult.violations,
-            warnings:       currentRuleResult.warnings,
-            score:          currentRuleResult.score,
-            violationCount: currentRuleResult.violationCount,
-          },
-        })
-
-        // ── Phase 2: Build feature overlays (violation-aware) ─────────────────
+        // ── Phase 2: Build feature overlays ──────────────────────────────────
         buildFeatureOverlays()
 
         if (showBoundingBox.value) buildBoundingBox(box)
@@ -2998,111 +2943,6 @@ export default {
       }
     }
 
-    // ─── Phase 4: Design Rule Check Engine ───────────────────────────────────
-    // Pure function — no Three.js, no Vue reactivity. Returns a result object
-    // that can be stored and re-emitted whenever rules or the model change.
-    const RULE_GETTERS = {
-      hole:   {
-        diameter:         f => f.diameter,
-        depth:            f => f.depth,
-        'depth/diameter': f => (f.diameter ? f.depth / f.diameter : null),
-        arcDeg:           f => f.arcDeg,
-      },
-      boss:   {
-        diameter:         f => f.diameter,
-        depth:            f => f.depth,
-        'depth/diameter': f => (f.diameter ? f.depth / f.diameter : null),
-      },
-      plane:  { count: Object.assign((_, list) => list.length, { listLevel: true }) },
-      cone:   { halfAngle: f => f.halfAngle, count: Object.assign((_, list) => list.length, { listLevel: true }) },
-      fillet: { count: Object.assign((_, list) => list.length, { listLevel: true }) },
-      corner: { angle: f => f.angle, type: f => f.type },
-      global: {
-        holeCount:          (_, __, m) => m.summary.holeCount,
-        bossCount:          (_, __, m) => m.summary.bossCount,
-        planeCount:         (_, __, m) => m.summary.planeCount,
-        coneCount:          (_, __, m) => m.summary.coneCount,
-        filletCount:        (_, __, m) => m.summary.filletCount,
-        acuteCornerCount:   (_, __, m) => m.summary.acuteCornerCount,
-        obtuseCornerCount:  (_, __, m) => m.summary.obtuseCornerCount,
-        isBodyOfRevolution: (_, __, m) => m.summary.isBodyOfRevolution,
-        'boundingBox.width':        (_, __, m) => m.summary.bbWidth,
-        'boundingBox.height':       (_, __, m) => m.summary.bbHeight,
-        'boundingBox.depth':        (_, __, m) => m.summary.bbDepth,
-        'boundingBox.maxDimension': (_, __, m) => m.summary.bbMaxDimension,
-      },
-    }
-
-    const RULE_OPS = {
-      '>=': (a, b) => typeof a === 'number' && a >= b,
-      '<=': (a, b) => typeof a === 'number' && a <= b,
-      '>':  (a, b) => typeof a === 'number' && a > b,
-      '<':  (a, b) => typeof a === 'number' && a < b,
-      '==': (a, b) => a == b,
-      '!=': (a, b) => a != b,
-      'is': (a, b) => a === b,
-    }
-
-    const evaluateDesignRules = (featureModel, rules) => {
-      const empty = { passed: true, violations: [], warnings: [], score: 100, violationCount: 0 }
-      if (!featureModel || !Array.isArray(rules) || !rules.length) return empty
-
-      const violations = []
-      const warnings   = []
-      let rulesPassed  = 0
-      let rulesTotal   = 0
-
-      for (const rule of rules) {
-        const { id, label, featureType, property, operator, threshold, severity = 'error' } = rule
-        if (!featureType || !property || !operator) continue
-        rulesTotal++
-
-        const list = ({
-          hole:   featureModel.holes   || [],
-          boss:   featureModel.bosses  || [],
-          plane:  featureModel.planes  || [],
-          cone:   featureModel.cones   || [],
-          fillet: featureModel.fillets || [],
-          corner: [...(featureModel.corners?.acute || []), ...(featureModel.corners?.obtuse || [])],
-          global: [null],
-        })[featureType] || []
-
-        const getter = RULE_GETTERS[featureType]?.[property]
-        if (!getter) { rulesPassed++; continue }
-
-        const op        = RULE_OPS[operator]
-        let rulePassed  = true
-        // List-level getters (e.g. count) produce one result for the whole list, not per feature
-        const evalList  = getter.listLevel ? [null] : list
-
-        for (const feature of evalList) {
-          const actual = getter(feature, list, featureModel)
-          if (actual === null || actual === undefined) continue
-          if (!op || !op(actual, threshold)) {
-            const entry = {
-              ruleId:      id || `${featureType}.${property}`,
-              label:       label || `${featureType} ${property} ${operator} ${threshold}`,
-              featureType,
-              featureId:   feature?.id   ?? null,
-              meshName:    feature?.meshName  ?? null,
-              meshNames:   feature?.meshNames ?? null,
-              actual,
-              threshold,
-              severity,
-            }
-            if (severity === 'warning') warnings.push(entry)
-            else violations.push(entry)
-            rulePassed = false
-          }
-        }
-
-        if (rulePassed) rulesPassed++
-      }
-
-      const score = rulesTotal > 0 ? Math.round((rulesPassed / rulesTotal) * 100) : 100
-      return { passed: violations.length === 0, violations, warnings, score, violationCount: violations.length }
-    }
-
     // ─── Phase 2: Feature Overlays ────────────────────────────────────────────
     const clearFeatureOverlays = () => {
       for (const overlays of featureOverlayMap.values()) overlays.forEach(o => removeOverlay(o))
@@ -3129,13 +2969,9 @@ export default {
       const featureColorsDef = props.content?.featureColors || []
       const activeTypes      = props.content?.activeFeatureTypes
       const hasActiveFilter  = Array.isArray(activeTypes) && activeTypes.length > 0
-      const violationColor   = props.content?.violationHighlightColor || '#ff3b30'
 
       const colorMap = Object.fromEntries(
         featureColorsDef.map(fc => [fc.featureType, { color: fc.color || '#888', visible: fc.visible !== false }])
-      )
-      const violatedIds = new Set(
-        (currentRuleResult?.violations || []).map(v => v.featureId).filter(Boolean)
       )
 
       const groups = [
@@ -3149,13 +2985,10 @@ export default {
       for (const { type, features } of groups) {
         const fc          = colorMap[type]
         const typeVisible = fc?.visible && (!hasActiveFilter || activeTypes.includes(type))
+        if (!typeVisible) continue
 
         for (const feature of features) {
-          const isViolated = violatedIds.has(feature.id)
-          // Violations always render; non-violations only render when the type is visible
-          if (!isViolated && !typeVisible) continue
-
-          const color    = isViolated ? violationColor : (fc?.color || '#888888')
+          const color    = fc?.color || '#888888'
           const overlays = []
 
           if (feature.meshNames?.length) {
@@ -3336,7 +3169,7 @@ export default {
     }, { deep: true })
 
     // Phase 2: Rebuild feature overlays when colors / active filter change
-    watch(() => [props.content?.featureColors, props.content?.activeFeatureTypes, props.content?.violationHighlightColor], () => {
+    watch(() => [props.content?.featureColors, props.content?.activeFeatureTypes], () => {
       if (libsReady.value && loadedModel) buildFeatureOverlays()
     }, { deep: true })
 
@@ -3366,27 +3199,6 @@ export default {
         toleranceEntriesRef.value = [...toleranceEntriesRef.value, { ...entry, id }]
       }
       updateToleranceVar()
-    }, { deep: true })
-
-    // Phase 4: Re-evaluate rules when rule definitions change; then refresh overlays
-    watch(() => props.content?.designRules, (rules) => {
-      if (!currentFeatureModel) return
-      currentRuleResult = evaluateDesignRules(currentFeatureModel, rules)
-      setRuleViolationsVar(currentRuleResult.violations)
-      setRuleWarningsVar(currentRuleResult.warnings)
-      setDesignScoreVar(currentRuleResult.score)
-      setViolationCountVar(currentRuleResult.violationCount)
-      emit('trigger-event', {
-        name:  'rules-evaluated',
-        event: {
-          passed:         currentRuleResult.passed,
-          violations:     currentRuleResult.violations,
-          warnings:       currentRuleResult.warnings,
-          score:          currentRuleResult.score,
-          violationCount: currentRuleResult.violationCount,
-        },
-      })
-      if (libsReady.value && loadedModel) buildFeatureOverlays()
     }, { deep: true })
 
     // ─── Lifecycle ────────────────────────────────────────────────────────────
@@ -3428,7 +3240,6 @@ export default {
       holeMeshNames       = new Set()
       holeMeshArray       = []
       currentFeatureModel = null
-      currentRuleResult   = null
       removeEdges()
       clearBoundingBox()
       overrideMaterials.forEach(m => m.dispose())
@@ -3569,7 +3380,7 @@ export default {
     align-items: center;
     gap: 0;
     z-index: 10;
-    background: #0D0D0D;
+    background: var(--ctrl-panel-bg, #0D0D0D);
     border-radius: 8px;
     padding: 4px;
     overflow: hidden;
@@ -3584,11 +3395,11 @@ export default {
     border: none;
     border-radius: 6px;
     background: transparent;
-    color: #ffffff;
+    color: var(--ctrl-btn-color, #ffffff);
     cursor: pointer;
     padding: 0;
     line-height: 1;
-    transition: background 0.12s;
+    transition: background 0.12s, color 0.12s;
 
     &:hover  { background: rgba(255, 255, 255, 0.15); }
     &:active { background: rgba(255, 255, 255, 0.25); }
@@ -3716,8 +3527,8 @@ export default {
 
   // ── Tolerance mode ────────────────────────────────────────────────────────────
   .ctrl-btn--active {
-    background: rgba(59, 130, 246, 0.25) !important;
-    color: #3b82f6 !important;
+    background: var(--ctrl-btn-active-bg, rgba(59, 130, 246, 0.25)) !important;
+    color: var(--ctrl-btn-active-color, #3b82f6) !important;
   }
 
   .tolerance-input-panel {
@@ -3821,8 +3632,8 @@ export default {
       display: flex;
       align-items: center;
       gap: 4px;
-      background: rgba(0, 229, 255, 0.12);
-      border: 1px solid rgba(0, 229, 255, 0.4);
+      background: color-mix(in srgb, var(--bbox-color, #00e5ff) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--bbox-color, #00e5ff) 40%, transparent);
       border-radius: 4px;
       padding: 2px 7px;
       backdrop-filter: blur(4px);
@@ -3830,7 +3641,7 @@ export default {
       .bbox-dim-axis {
         font-size: 9px;
         font-weight: 700;
-        color: rgba(0, 229, 255, 0.7);
+        color: color-mix(in srgb, var(--bbox-color, #00e5ff) 70%, white);
         font-family: monospace;
         letter-spacing: 0.05em;
       }
@@ -3838,7 +3649,7 @@ export default {
       .bbox-dim-value {
         font-size: 11px;
         font-weight: 600;
-        color: #e0f7fa;
+        color: color-mix(in srgb, var(--bbox-color, #00e5ff) 20%, white);
         font-family: monospace;
       }
     }

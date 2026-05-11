@@ -710,20 +710,6 @@ export default {
       /* wwEditor:end */
     },
 
-    violationHighlightColor: {
-      label: { en: 'Violation Highlight Color' },
-      type: 'Color',
-      section: 'style',
-      bindable: true,
-      defaultValue: '#ff3b30',
-      /* wwEditor:start */
-      bindingValidation: {
-        type: 'string',
-        tooltip: 'Color applied to feature overlays that fail a design rule.',
-      },
-      /* wwEditor:end */
-    },
-
     // ── Phase 3: GD&T / PMI Annotation Display ────────────────────────────────
     annotationDisplayMode: {
       label: { en: 'Annotation Display Mode' },
@@ -746,38 +732,60 @@ export default {
       /* wwEditor:end */
     },
 
-    // ── Phase 4: Design Rule Check ─────────────────────────────────────────────
-    designRules: {
-      label: { en: 'Design Rules' },
-      type: 'Array',
-      section: 'settings',
+    // ── Controls panel colors ──────────────────────────────────────────────────
+    controlsPanelBg: {
+      label: { en: 'Controls Panel Background' },
+      type: 'Color',
+      section: 'style',
       bindable: true,
-      defaultValue: [],
-      options: {
-        expandable: true,
-        getItemLabel(item) { return item.label || item.id || `${item.featureType}.${item.property} ${item.operator} ${item.threshold}` },
-        item: {
-          type: 'Object',
-          defaultValue: { id: '', label: '', featureType: 'hole', property: 'diameter', operator: '>=', threshold: 3, severity: 'error' },
-          options: {
-            item: {
-              id:          { label: { en: 'ID' },           type: 'Text' },
-              label:       { label: { en: 'Label' },         type: 'Text' },
-              featureType: { label: { en: 'Feature Type' },  type: 'Text' },
-              property:    { label: { en: 'Property' },      type: 'Text' },
-              operator:    { label: { en: 'Operator' },      type: 'Text' },
-              threshold:   { label: { en: 'Threshold' },     type: 'Number' },
-              severity:    { label: { en: 'Severity' },      type: 'Text' },
-            },
-          },
-        },
-      },
+      defaultValue: '#0D0D0D',
       /* wwEditor:start */
       bindingValidation: {
-        type: 'array',
-        tooltip: 'Array of rule objects: { id, label, featureType, property, operator, threshold, severity }. featureType: hole | boss | plane | cone | fillet | corner | global. operator: >= | <= | > | < | == | !=. severity: error | warning.',
+        type: 'string',
+        tooltip: 'Background color of the left-side controls panel.',
       },
-      propertyHelp: 'Define manufacturing constraints. Violated features are highlighted and exposed via the ruleViolations variable.',
+      /* wwEditor:end */
+    },
+
+    controlsBtnColor: {
+      label: { en: 'Controls Button Icon Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#ffffff',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Icon/text color for buttons in the controls panel.',
+      },
+      /* wwEditor:end */
+    },
+
+    controlsBtnActiveBg: {
+      label: { en: 'Controls Active Button Background' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: 'rgba(59,130,246,0.25)',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Background color of a toggled-on (active) button in the controls panel.',
+      },
+      /* wwEditor:end */
+    },
+
+    controlsBtnActiveColor: {
+      label: { en: 'Controls Active Button Icon Color' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#3b82f6',
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Icon/text color of a toggled-on (active) button in the controls panel.',
+      },
       /* wwEditor:end */
     },
   },
@@ -880,17 +888,6 @@ export default {
         acuteCornerCount:   0,
         obtuseCornerCount:  0,
         isBodyOfRevolution: false,
-      },
-    },
-    {
-      name: 'rules-evaluated',
-      label: { en: 'On Rules Evaluated' },
-      event: {
-        passed:         true,
-        violations:     [],   // [{ ruleId, label, featureType, featureId, actual, threshold, severity }]
-        warnings:       [],
-        score:          100,  // 0–100 percentage of rules passing
-        violationCount: 0,
       },
     },
     {
