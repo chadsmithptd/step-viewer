@@ -3404,7 +3404,7 @@ export default {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0;
+    gap: 4px;
     z-index: 10;
     background: var(--ctrl-panel-bg, #0D0D0D);
     border-radius: 8px;
@@ -3523,8 +3523,8 @@ export default {
     left: 50%;
     transform: translateX(-50%);
     display: flex;
-    gap: 0;
-    background: #0D0D0D;
+    gap: 4px;
+    background: var(--ctrl-panel-bg, #0D0D0D);
     border-radius: 8px;
     padding: 4px;
     z-index: 10;
@@ -3536,18 +3536,18 @@ export default {
     border: none;
     border-radius: 5px;
     background: transparent;
-    color: #aaa;
+    color: color-mix(in srgb, var(--ctrl-btn-color, #ffffff) 55%, transparent);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.03em;
     cursor: pointer;
     transition: background 0.12s, color 0.12s;
 
-    &:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    &:hover { background: rgba(255,255,255,0.1); color: var(--ctrl-btn-color, #ffffff); }
 
     &--active {
-      background: rgba(59, 130, 246, 0.25);
-      color: #3b82f6;
+      background: var(--ctrl-btn-active-bg, rgba(59, 130, 246, 0.25));
+      color: var(--ctrl-btn-active-color, #3b82f6);
     }
   }
 
