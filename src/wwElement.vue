@@ -2602,6 +2602,7 @@ export default {
         const cylindricalFaces = rawFaces.filter(f => f.surfaceType === 'Cylinder')
         const otherFaces       = rawFaces.filter(f => f.surfaceType !== 'Cylinder')
         const mergedCylinders  = mergeCylinders(cylindricalFaces)
+        detectCounterbores(mergedCylinders)
         const allFaces         = [...otherFaces, ...mergedCylinders]
         facesData = allFaces
         holeMeshNames = new Set()
@@ -2632,11 +2633,12 @@ export default {
         // Sharp corner detection disabled for performance — see docs/reactivate-sharp-corners.md
         const cornerResult = null
 
-        const holeCount = mergedCylinders.filter(c => c.isHole === true).length
-        const bossCount = mergedCylinders.filter(c => c.isHole === false).length
+        const holeCount        = mergedCylinders.filter(c => c.isHole === true && !c.isCounterbore).length
+        const counterboreCount = mergedCylinders.filter(c => c.isHole === true &&  c.isCounterbore).length
+        const bossCount        = mergedCylinders.filter(c => c.isHole === false).length
         emit('trigger-event', {
           name:  'holes-detected',
-          event: { cylinders: mergedCylinders, holeCount, bossCount },
+          event: { cylinders: mergedCylinders, holeCount, counterboreCount, bossCount },
         })
 
         // Compute surface area, volume, and bounding box
@@ -2914,26 +2916,84 @@ export default {
       }
     }
 
+    // ─── Counterbore detection ────────────────────────────────────────────────
+    // A counterbore is a larger-diameter concave cylinder that is coaxial with
+    // and axially adjacent to a smaller-diameter bore. Three checks:
+    //   1. Axes are parallel (|dot| > 0.95).
+    //   2. Centers are collinear: radial distance from A's axis line < 35% of B's diameter.
+    //   3. Axial extents are touching or overlapping (gap < 25% of the larger diameter).
+    // Tags every cylinder with isCounterbore: boolean.
+    const detectCounterbores = (cylinders) => {
+      for (const c of cylinders) c.isCounterbore = false
+      const holes = cylinders.filter(c => c.isHole === true)
+      if (holes.length < 2) return
+
+      for (let i = 0; i < holes.length; i++) {
+        const A = holes[i]
+        if (!A.center || !A.axis || !A.diameter) continue
+
+        for (let j = 0; j < holes.length; j++) {
+          if (i === j) continue
+          const B = holes[j]
+          if (!B.center || !B.axis || !B.diameter) continue
+          // A must be meaningfully larger than B to be its counterbore
+          if (A.diameter <= B.diameter * 1.15) continue
+
+          // Check 1: axes parallel or anti-parallel
+          const dot = Math.abs(A.axis.x*B.axis.x + A.axis.y*B.axis.y + A.axis.z*B.axis.z)
+          if (dot < 0.95) continue
+
+          // Check 2: centers are on the same axis line
+          const vx = B.center.x - A.center.x
+          const vy = B.center.y - A.center.y
+          const vz = B.center.z - A.center.z
+          const along = vx*A.axis.x + vy*A.axis.y + vz*A.axis.z
+          const perpSq =
+            (vx - along*A.axis.x)**2 +
+            (vy - along*A.axis.y)**2 +
+            (vz - along*A.axis.z)**2
+          if (perpSq > (B.diameter * 0.35)**2) continue
+
+          // Check 3: axial extents are adjacent or overlapping
+          const tA = A.center.x*A.axis.x + A.center.y*A.axis.y + A.center.z*A.axis.z
+          const tB = B.center.x*A.axis.x + B.center.y*A.axis.y + B.center.z*A.axis.z
+          const gap = Math.max(tA - (A.depth||0)/2, tB - (B.depth||0)/2)
+                    - Math.min(tA + (A.depth||0)/2, tB + (B.depth||0)/2)
+          if (gap > Math.max(A.diameter, B.diameter) * 0.25) continue
+
+          // A is a counterbore of B
+          A.isCounterbore = true
+          break
+        }
+      }
+    }
+
     // ─── Phase 1: Feature Model ───────────────────────────────────────────────
     // Organises flat facesData output into a typed MBD feature hierarchy.
     // Called once per model load with the already-computed analysis results —
     // no additional geometry passes required.
     const buildFeatureModel = (mergedCylinders, allFaces, cornerResult, borResult, boundingBox = null) => {
+      const mapHole = (c, i, prefix) => ({
+        id:        `${prefix}-${i}`,
+        diameter:  c.diameter,
+        depth:     c.depth,
+        ldRatio:   (c.depth != null && c.diameter > 0) ? Math.round((c.depth / c.diameter) * 100) / 100 : null,
+        axis:      c.axis,
+        center:    c.center,
+        arcDeg:    c.arcDeg,
+        meshName:  c.meshName,
+        meshNames: c.meshNames || [c.meshName].filter(Boolean),
+        tolerance: null,
+        datum:     null,
+      })
+
       const holes = mergedCylinders
-        .filter(c => c.isHole === true)
-        .map((c, i) => ({
-          id:        `hole-${i}`,
-          diameter:  c.diameter,
-          depth:     c.depth,
-          ldRatio:   (c.depth != null && c.diameter > 0) ? Math.round((c.depth / c.diameter) * 100) / 100 : null,
-          axis:      c.axis,
-          center:    c.center,
-          arcDeg:    c.arcDeg,
-          meshName:  c.meshName,
-          meshNames: c.meshNames || [c.meshName].filter(Boolean),
-          tolerance: null,
-          datum:     null,
-        }))
+        .filter(c => c.isHole === true && !c.isCounterbore)
+        .map((c, i) => mapHole(c, i, 'hole'))
+
+      const counterbores = mergedCylinders
+        .filter(c => c.isHole === true && c.isCounterbore)
+        .map((c, i) => mapHole(c, i, 'counterbore'))
 
       const bosses = mergedCylinders
         .filter(c => c.isHole === false && c.isConcave === false)
@@ -2982,6 +3042,7 @@ export default {
 
       return {
         holes,
+        counterbores,
         bosses,
         planes,
         cones,
@@ -2995,6 +3056,7 @@ export default {
         } : null,
         summary: {
           holeCount:          holes.length,
+          counterboreCount:   counterbores.length,
           bossCount:          bosses.length,
           planeCount:         planes.length,
           coneCount:          cones.length,
