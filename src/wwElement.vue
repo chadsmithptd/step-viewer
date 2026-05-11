@@ -2603,9 +2603,12 @@ export default {
         const otherFaces       = rawFaces.filter(f => f.surfaceType !== 'Cylinder')
         const mergedCylinders  = mergeCylinders(cylindricalFaces)
         detectCounterbores(mergedCylinders)
-        // Tag shallow concave cylinders (L/D < 0.5) as pockets; counterbores are excluded.
+        detectThroughHoles(mergedCylinders, otherFaces.filter(f => f.faceType === 'planar'))
+        // Tag shallow blind concave cylinders (L/D < 0.5) as pockets.
+        // Counterbores and through-holes are excluded: a through-hole with L/D < 0.5
+        // (e.g. thin sheet metal) must not be misclassified as a pocket.
         for (const c of mergedCylinders) {
-          c.isPocket = c.isHole === true && !c.isCounterbore &&
+          c.isPocket = c.isHole === true && !c.isCounterbore && !c.isThrough &&
                        c.diameter > 0 && c.depth != null &&
                        (c.depth / c.diameter) < 0.5
         }
@@ -2641,13 +2644,14 @@ export default {
         // Sharp corner detection disabled for performance — see docs/reactivate-sharp-corners.md
         const cornerResult = null
 
-        const holeCount        = mergedCylinders.filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket).length
-        const counterboreCount = mergedCylinders.filter(c => c.isHole === true &&  c.isCounterbore).length
-        const pocketCount      = mergedCylinders.filter(c => c.isPocket === true).length
-        const bossCount        = mergedCylinders.filter(c => c.isHole === false).length
+        const holeCount         = mergedCylinders.filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket && !c.isThrough).length
+        const throughHoleCount  = mergedCylinders.filter(c => c.isHole === true && c.isThrough && !c.isCounterbore).length
+        const counterboreCount  = mergedCylinders.filter(c => c.isCounterbore === true).length
+        const pocketCount       = mergedCylinders.filter(c => c.isPocket === true).length
+        const bossCount         = mergedCylinders.filter(c => c.isHole === false).length
         emit('trigger-event', {
           name:  'holes-detected',
-          event: { cylinders: mergedCylinders, holeCount, counterboreCount, pocketCount, bossCount },
+          event: { cylinders: mergedCylinders, holeCount, throughHoleCount, counterboreCount, pocketCount, bossCount },
         })
 
         // Compute surface area, volume, and bounding box
@@ -2977,6 +2981,51 @@ export default {
       }
     }
 
+    // ─── Through-hole detection ───────────────────────────────────────────────
+    // A through-hole has no planar cap at either axial end. For each concave
+    // cylinder, search the already-computed planar faces for one whose normal
+    // is parallel to the cylinder axis AND whose centroid falls within the
+    // cylinder's radial footprint near either end extent. No match → isThrough.
+    // Counterbores are tested separately (they may or may not penetrate fully).
+    const detectThroughHoles = (cylinders, planarFaces) => {
+      for (const c of cylinders) c.isThrough = false
+      const candidates = cylinders.filter(c => c.isHole === true)
+      if (candidates.length === 0 || planarFaces.length === 0) return
+
+      for (const cyl of candidates) {
+        if (!cyl.center || !cyl.axis || !cyl.diameter || cyl.depth == null) {
+          cyl.isThrough = true   // geometry incomplete — assume through
+          continue
+        }
+        const cc = cyl.center, ca = cyl.axis
+        const r  = cyl.diameter / 2
+        const d  = cyl.depth
+        const tC = cc.x*ca.x + cc.y*ca.y + cc.z*ca.z
+        const endLo = tC - d / 2
+        const endHi = tC + d / 2
+        const axialTol   = Math.max(d * 0.35, r * 0.3)  // scale with both depth and radius
+        const radialLim2 = (r * 1.35) ** 2
+
+        let foundCap = false
+        for (const pf of planarFaces) {
+          if (!pf.axis || !pf.center) continue
+          // Check 1: normals parallel to cylinder axis
+          if (Math.abs(pf.axis.x*ca.x + pf.axis.y*ca.y + pf.axis.z*ca.z) < 0.92) continue
+          // Check 2: face centroid near either end of the cylinder's axial extent
+          const tP = pf.center.x*ca.x + pf.center.y*ca.y + pf.center.z*ca.z
+          if (Math.min(Math.abs(tP - endLo), Math.abs(tP - endHi)) > axialTol) continue
+          // Check 3: face centroid is radially inside the cylinder's cross-section
+          const vx = pf.center.x - cc.x, vy = pf.center.y - cc.y, vz = pf.center.z - cc.z
+          const proj = vx*ca.x + vy*ca.y + vz*ca.z
+          const perpSq = (vx-proj*ca.x)**2 + (vy-proj*ca.y)**2 + (vz-proj*ca.z)**2
+          if (perpSq > radialLim2) continue
+          foundCap = true
+          break
+        }
+        cyl.isThrough = !foundCap
+      }
+    }
+
     // ─── Phase 1: Feature Model ───────────────────────────────────────────────
     // Organises flat facesData output into a typed MBD feature hierarchy.
     // Called once per model load with the already-computed analysis results —
@@ -2997,11 +3046,15 @@ export default {
       })
 
       const holes = mergedCylinders
-        .filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket)
+        .filter(c => c.isHole === true && !c.isCounterbore && !c.isPocket && !c.isThrough)
         .map((c, i) => mapHole(c, i, 'hole'))
 
+      const throughHoles = mergedCylinders
+        .filter(c => c.isHole === true && c.isThrough === true && !c.isCounterbore)
+        .map((c, i) => mapHole(c, i, 'through'))
+
       const counterbores = mergedCylinders
-        .filter(c => c.isHole === true && c.isCounterbore)
+        .filter(c => c.isCounterbore === true)
         .map((c, i) => mapHole(c, i, 'counterbore'))
 
       const pockets = mergedCylinders
@@ -3055,6 +3108,7 @@ export default {
 
       return {
         holes,
+        throughHoles,
         counterbores,
         pockets,
         bosses,
@@ -3070,6 +3124,7 @@ export default {
         } : null,
         summary: {
           holeCount:          holes.length,
+          throughHoleCount:   throughHoles.length,
           counterboreCount:   counterbores.length,
           pocketCount:        pockets.length,
           bossCount:          bosses.length,

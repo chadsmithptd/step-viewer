@@ -851,8 +851,9 @@ export default {
       name: 'holes-detected',
       label: { en: 'On Holes Detected' },
       event: {
-        cylinders:        [],  // all cylindrical faces — each has meshName, objectName, diameter, depth, axis, center, isHole, isCounterbore, isPocket
-        holeCount:        0,   // concave cylinders (bores/holes) — excludes counterbores and pockets
+        cylinders:        [],  // all cylindrical faces — each has diameter, depth, axis, center, isHole, isThrough, isCounterbore, isPocket
+        holeCount:        0,   // blind holes only (isHole, not through/counterbore/pocket)
+        throughHoleCount: 0,   // holes with no planar cap at either end
         counterboreCount: 0,   // concave cylinders identified as counterbores
         pocketCount:      0,   // concave cylinders with L/D < 0.5 (wide, shallow)
         bossCount:        0,   // convex cylinders (pins, bosses)
@@ -883,6 +884,7 @@ export default {
       label: { en: 'On Feature Model Built' },
       event: {
         holeCount:          0,
+        throughHoleCount:   0,
         counterboreCount:   0,
         pocketCount:        0,
         bossCount:          0,
