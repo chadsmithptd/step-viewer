@@ -1663,7 +1663,7 @@ export default {
             if (m.color) {
               const oc = origArr[idx]?.color || origArr[0]?.color
               if (oc) {
-                if (needsTransparency) m.color.setRGB(oc.r * 0.5, oc.g * 0.5, oc.b * 0.5)
+                if (needsTransparency) m.color.setRGB(oc.r * 0.9, oc.g * 0.9, oc.b * 0.9)
                 else                   m.color.copy(oc)
               }
             }
@@ -1690,7 +1690,7 @@ export default {
         if (!obj.isMesh) return
         const isHole    = holeMeshNames.has(obj.name)
         const holeColor = (isHole && needsTransparency)
-          ? baseColor.clone().multiplyScalar(0.5)
+          ? baseColor.clone().multiplyScalar(0.9)
           : baseColor
         const mat = new THREE.MeshStandardMaterial({
           color:       holeColor,
