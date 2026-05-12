@@ -1642,22 +1642,25 @@ export default {
           if (isHole) {
             if (needsTransparency) {
               // transparent:true puts holes in the transparent render queue so they draw
-              // AFTER the body (renderOrder 2 > 0), preventing the body from blending
-              // over them. depthTest:false ensures the full wall is always visible.
+              // AFTER the body (renderOrder 2 > 0). DoubleSide renders both faces of the
+              // cylindrical wall so the full tube diameter is visible from any angle.
               m.transparent = true
-              m.opacity     = 0.8
+              m.opacity     = 1
               m.depthWrite  = false
               m.depthTest   = false
+              m.side        = THREE.DoubleSide
             } else {
+              const origM   = origArr[idx] || origArr[0]
               m.transparent = false
               m.opacity     = 1
               m.depthWrite  = true
               m.depthTest   = true
+              m.side        = origM?.side ?? THREE.FrontSide
             }
             if (m.color) {
               const oc = origArr[idx]?.color || origArr[0]?.color
               if (oc) {
-                if (needsTransparency) m.color.setRGB(oc.r * 0.8, oc.g * 0.8, oc.b * 0.8)
+                if (needsTransparency) m.color.setRGB(oc.r * 0.5, oc.g * 0.5, oc.b * 0.5)
                 else                   m.color.copy(oc)
               }
             }
@@ -1684,16 +1687,17 @@ export default {
         if (!obj.isMesh) return
         const isHole    = holeMeshNames.has(obj.name)
         const holeColor = (isHole && needsTransparency)
-          ? baseColor.clone().multiplyScalar(0.8)
+          ? baseColor.clone().multiplyScalar(0.5)
           : baseColor
         const mat = new THREE.MeshStandardMaterial({
           color:       holeColor,
           roughness:   0.35,
           metalness:   0.1,
           transparent: (isHole && needsTransparency) ? true : needsTransparency,
-          opacity:     (isHole && needsTransparency) ? 0.8 : (needsTransparency ? op : 1),
+          opacity:     (isHole && needsTransparency) ? 1 : (needsTransparency ? op : 1),
           depthWrite:  (isHole && needsTransparency) ? false : !needsTransparency,
           depthTest:   (isHole && needsTransparency) ? false : true,
+          side:        (isHole && needsTransparency) ? THREE.DoubleSide : THREE.FrontSide,
         })
         obj.material = mat
         obj.renderOrder = (isHole && needsTransparency) ? 2 : 0
