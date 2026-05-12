@@ -2720,10 +2720,19 @@ export default {
 
       if (toleranceMode.value) { handleToleranceFaceClick(allHits); return }
 
-      if (props.content?.enableSelection === false) return
+      const selEnabled  = props.content?.enableSelection  !== false
+      const holeEnabled = props.content?.enableHoleSelection !== false
+      if (!selEnabled && !holeEnabled) return
 
-      const holeHits = holeMeshArray.length > 0 ? raycaster.intersectObjects(holeMeshArray, true) : []
-      const hits = holeHits.length > 0 ? holeHits : allHits
+      // Hole-priority cast — only when hole selection is active
+      const holeHits = (holeEnabled && holeMeshArray.length > 0)
+        ? raycaster.intersectObjects(holeMeshArray, true)
+        : []
+      // General hits — exclude hole meshes when hole selection is off so clicks pass through
+      const surfaceHits = selEnabled
+        ? (holeEnabled ? allHits : allHits.filter(h => !holeMeshNames.has(h.object.name)))
+        : []
+      const hits = holeHits.length > 0 ? holeHits : surfaceHits
 
       if (hits.length > 0) {
         const hit      = hits[0]

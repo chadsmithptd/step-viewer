@@ -318,7 +318,21 @@ export default {
       /* wwEditor:start */
       bindingValidation: {
         type: 'boolean',
-        tooltip: 'When off, clicking on model surfaces does nothing — no face selection or highlight.',
+        tooltip: 'When off, clicking on non-hole model surfaces does nothing — no face selection or highlight.',
+      },
+      /* wwEditor:end */
+    },
+
+    enableHoleSelection: {
+      label: { en: 'Enable Hole Selection' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'When off, clicking on hole surfaces does nothing. Independent of Enable Surface Selection.',
       },
       /* wwEditor:end */
     },
