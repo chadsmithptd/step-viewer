@@ -5,8 +5,6 @@
       ref="canvasRef"
       class="viewer-canvas"
       @pointerdown="onPointerDown"
-      @mousemove="onCanvasMouseMove"
-      @mouseleave="clearHoleHover"
       @click="onCanvasClick"
       @contextmenu.prevent
     />
@@ -394,8 +392,6 @@ export default {
     let defaultCameraPos     = null
     let defaultTarget        = null
     let focusedHoleOverlays  = []
-    let hoverHoleMesh        = null   // currently hovered hole mesh
-    let hoverHoleMats        = []     // saved original materials for hover restore
 
     let tolerancePendingA        = null
     let tolerancePendingB        = null
@@ -2732,59 +2728,6 @@ export default {
       pointerDownPos = { x: event.clientX, y: event.clientY }
     }
 
-    // hoverHoleMesh tracks the primary hit mesh; hoverHoleMeshes is the full group
-    let hoverHoleMeshes = []
-
-    const clearHoleHover = () => {
-      if (!hoverHoleMesh) return
-      hoverHoleMeshes.forEach((mesh, mi) => {
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-        mats.forEach((m, i) => {
-          const saved = hoverHoleMats[mi]?.[i]
-          if (saved) { m.color.copy(saved); m.needsUpdate = true }
-        })
-      })
-      hoverHoleMesh   = null
-      hoverHoleMeshes = []
-      hoverHoleMats   = []
-    }
-
-    const onCanvasMouseMove = (event) => {
-      if (!scene || !camera || !loadedModel || !holeMeshArray.length) return
-      if (props.content?.enableHoleSelection === false) { clearHoleHover(); return }
-      const canvas = canvasRef.value
-      const rect   = canvas.getBoundingClientRect()
-      const mouse  = new THREE.Vector2(
-        ((event.clientX - rect.left) / rect.width)  * 2 - 1,
-        -((event.clientY - rect.top)  / rect.height) * 2 + 1
-      )
-      raycaster.setFromCamera(mouse, activeCamera || camera)
-      const hits    = raycaster.intersectObjects(holeMeshArray, true)
-      const hitMesh = hits.length > 0 ? hits[0].object : null
-
-      if (hitMesh === hoverHoleMesh) return   // no change
-      clearHoleHover()
-      if (!hitMesh) return
-
-      // Resolve all sibling meshes that belong to the same logical hole
-      const fi       = hits[0].faceIndex ?? 0
-      const groupIdx = getGroupIndex(hitMesh, fi)
-      const faceData = getFaceData(hitMesh.name || '', groupIdx)
-      const siblingNames = faceData?.meshNames ?? [hitMesh.name]
-      const groupMeshes  = siblingNames
-        .map(n => clickableMeshes.find(m => m.name === n))
-        .filter(Boolean)
-
-      hoverHoleMesh   = hitMesh
-      hoverHoleMeshes = groupMeshes
-      const hoverColor = new THREE.Color('#CB2B15')
-      hoverHoleMats = groupMeshes.map(mesh => {
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-        const saved = mats.map(m => m.color.clone())
-        mats.forEach(m => { m.color.copy(hoverColor); m.needsUpdate = true })
-        return saved
-      })
-    }
 
     const onCanvasClick = (event) => {
       if (pointerDownPos) {
@@ -2803,7 +2746,6 @@ export default {
         -((event.clientY - rect.top)  / rect.height) * 2 + 1
       )
 
-      clearHoleHover()   // remove hover tint before building selection overlay
       raycaster.setFromCamera(mouse, camera)
       const allHits = raycaster.intersectObjects(clickableMeshes, true)
 
@@ -3564,7 +3506,7 @@ export default {
       // Bounding box
       showBoundingBox, showBoundingBoxButton, bboxLabelsRef, toggleBoundingBox,
       // Handlers
-      onPointerDown, onCanvasClick, onCanvasMouseMove, clearHoleHover,
+      onPointerDown, onCanvasClick,
       resetCamera, rotateLeft, rotateRight,
       triggerFileUpload, onFileSelected, onDragOver, onDragLeave, onDrop,
       /* wwEditor:start */
