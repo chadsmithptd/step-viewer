@@ -1487,7 +1487,7 @@ export default {
 
     // Build a sub-geometry overlay mesh that covers only the group containing faceIndex.
     // offsetFactor: -1 for annotations (below), -2 for selections (above annotations).
-    const makeOverlayMesh = (mesh, faceIndex, color, offsetFactor = -2) => {
+    const makeOverlayMesh = (mesh, faceIndex, color, offsetFactor = -2, depthTest = true) => {
       const geo    = mesh.geometry
       const subGeo = new THREE.BufferGeometry()
 
@@ -1526,6 +1526,7 @@ export default {
         polygonOffsetUnits:  offsetFactor,
         side:                THREE.DoubleSide,
         depthWrite:          false,
+        depthTest,
       }))
 
       mesh.updateWorldMatrix(true, false)
@@ -1565,13 +1566,15 @@ export default {
     // Build overlay meshes for a selection. For merged cylinders, creates one overlay
     // per constituent mesh so the full 360° surface is highlighted, not just the clicked half.
     const buildSelectionOverlays = (clickedMesh, faceIndex, faceData) => {
-      const color = props.content?.selectionColor || '#1a73e8'
-      const overlays = [makeOverlayMesh(clickedMesh, faceIndex, color, -2)]
+      const color   = props.content?.selectionColor || '#1a73e8'
+      const isHole  = faceData?.isHole === true
+      const dt      = !isHole   // holes: depthTest off so overlays stay visible at all angles
+      const overlays = [makeOverlayMesh(clickedMesh, faceIndex, color, -2, dt)]
       if (faceData?.merged && Array.isArray(faceData.meshNames)) {
         for (const name of faceData.meshNames) {
           if (name === clickedMesh.name) continue
           const m = clickableMeshes.find(cm => cm.name === name)
-          if (m) overlays.push(makeOverlayMesh(m, 0, color, -2))
+          if (m) overlays.push(makeOverlayMesh(m, 0, color, -2, dt))
         }
       }
       return overlays
@@ -2774,7 +2777,7 @@ export default {
 
       hoverHoleMesh   = hitMesh
       hoverHoleMeshes = groupMeshes
-      const hoverColor = new THREE.Color('#0a2a6e')
+      const hoverColor = new THREE.Color('#CB2B15')
       hoverHoleMats = groupMeshes.map(mesh => {
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
         const saved = mats.map(m => m.color.clone())
@@ -2800,6 +2803,7 @@ export default {
         -((event.clientY - rect.top)  / rect.height) * 2 + 1
       )
 
+      clearHoleHover()   // remove hover tint before building selection overlay
       raycaster.setFromCamera(mouse, camera)
       const allHits = raycaster.intersectObjects(clickableMeshes, true)
 
