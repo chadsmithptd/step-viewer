@@ -5,6 +5,8 @@
       ref="canvasRef"
       class="viewer-canvas"
       @pointerdown="onPointerDown"
+      @mousemove="onCanvasMouseMove"
+      @mouseleave="clearHoleHover"
       @click="onCanvasClick"
       @contextmenu.prevent
     />
@@ -392,6 +394,8 @@ export default {
     let defaultCameraPos     = null
     let defaultTarget        = null
     let focusedHoleOverlays  = []
+    let hoverHoleMesh        = null   // currently hovered hole mesh
+    let hoverHoleMats        = []     // saved original materials for hover restore
 
     let tolerancePendingA        = null
     let tolerancePendingB        = null
@@ -2641,7 +2645,7 @@ export default {
         for (const c of mergedCylinders) {
           c.isPocket = c.isHole === true && !c.isCounterbore && !c.isThrough &&
                        c.diameter > 0 && c.depth != null &&
-                       (c.depth / c.diameter) < 0.5
+                       (c.depth / c.diameter) < 0.4
         }
         const allFaces         = [...otherFaces, ...mergedCylinders]
         facesData = allFaces
@@ -2723,6 +2727,43 @@ export default {
     // ─── Canvas click → raycasting ────────────────────────────────────────────
     const onPointerDown = (event) => {
       pointerDownPos = { x: event.clientX, y: event.clientY }
+    }
+
+    const clearHoleHover = () => {
+      if (!hoverHoleMesh) return
+      const mats = Array.isArray(hoverHoleMesh.material) ? hoverHoleMesh.material : [hoverHoleMesh.material]
+      mats.forEach((m, i) => {
+        if (hoverHoleMats[i]) m.color.copy(hoverHoleMats[i])
+        m.needsUpdate = true
+      })
+      hoverHoleMesh = null
+      hoverHoleMats = []
+    }
+
+    const onCanvasMouseMove = (event) => {
+      if (!scene || !camera || !loadedModel || !holeMeshArray.length) return
+      if (props.content?.enableHoleSelection === false) { clearHoleHover(); return }
+      const canvas = canvasRef.value
+      const rect   = canvas.getBoundingClientRect()
+      const mouse  = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width)  * 2 - 1,
+        -((event.clientY - rect.top)  / rect.height) * 2 + 1
+      )
+      raycaster.setFromCamera(mouse, activeCamera || camera)
+      const hits = raycaster.intersectObjects(holeMeshArray, true)
+      const hitMesh = hits.length > 0 ? hits[0].object : null
+
+      if (hitMesh === hoverHoleMesh) return   // no change
+
+      clearHoleHover()
+
+      if (hitMesh) {
+        hoverHoleMesh = hitMesh
+        const hoverColor = new THREE.Color('#0a2a6e')
+        const mats = Array.isArray(hitMesh.material) ? hitMesh.material : [hitMesh.material]
+        hoverHoleMats = mats.map(m => m.color.clone())
+        mats.forEach(m => { m.color.copy(hoverColor); m.needsUpdate = true })
+      }
     }
 
     const onCanvasClick = (event) => {
@@ -3502,7 +3543,7 @@ export default {
       // Bounding box
       showBoundingBox, showBoundingBoxButton, bboxLabelsRef, toggleBoundingBox,
       // Handlers
-      onPointerDown, onCanvasClick,
+      onPointerDown, onCanvasClick, onCanvasMouseMove, clearHoleHover,
       resetCamera, rotateLeft, rotateRight,
       triggerFileUpload, onFileSelected, onDragOver, onDragLeave, onDrop,
       /* wwEditor:start */
@@ -3526,8 +3567,8 @@ export default {
     left: 0;
     width: 100%;
     height: 100%;
-    cursor: grab;
-    &:active { cursor: grabbing; }
+    cursor: default;
+    &:active { cursor: default; }
   }
 
   // ── Overlays ──────────────────────────────────────────────────────────────
