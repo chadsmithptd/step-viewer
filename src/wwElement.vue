@@ -768,13 +768,17 @@ export default {
       const w = renderer.domElement.clientWidth
       const h = renderer.domElement.clientHeight
       const els = container.children
+      // Clamp margins sized to approximately half the label pill dimensions
+      // so the label stays fully inside the viewport rather than disappearing.
+      const hPad = 58   // ~half label width
+      const vPad = 14   // ~half label height
       for (let i = 0; i < els.length && i < bboxLabelPoints.length; i++) {
         const v = bboxLabelPoints[i].point.clone().project(activeCamera || camera)
-        const x = (v.x *  0.5 + 0.5) * w
-        const y = (v.y * -0.5 + 0.5) * h
-        const visible = v.z < 1 && x >= -60 && x <= w + 60 && y >= -30 && y <= h + 30
+        if (v.z >= 1) { els[i].style.display = 'none'; continue }  // behind camera
+        const x = Math.max(hPad, Math.min(w - hPad, (v.x *  0.5 + 0.5) * w))
+        const y = Math.max(vPad, Math.min(h - vPad, (v.y * -0.5 + 0.5) * h))
         els[i].style.transform = `translate(calc(${x}px - 50%), calc(${y}px - 50%))`
-        els[i].style.display = visible ? '' : 'none'
+        els[i].style.display = ''
       }
     }
 
