@@ -1633,15 +1633,25 @@ export default {
       const needsTransparency = op < 1
       loadedModel.traverse(obj => {
         if (!obj.isMesh) return
-        const isHole = holeMeshNames.has(obj.name)
-        const mats   = Array.isArray(obj.material) ? obj.material : [obj.material]
-        mats.forEach(m => {
+        const isHole  = holeMeshNames.has(obj.name)
+        const mats    = Array.isArray(obj.material) ? obj.material : [obj.material]
+        const origMat = originalMaterials.get(obj)
+        const origArr = origMat ? (Array.isArray(origMat) ? origMat : [origMat]) : []
+        mats.forEach((m, idx) => {
           if (!m) return
           if (isHole) {
             m.transparent = false
             m.opacity     = 1
             m.depthWrite  = true
             m.depthTest   = !needsTransparency
+            // Darken hole colour in opacity mode so cavities stay visually distinct
+            if (m.color) {
+              const oc = origArr[idx]?.color || origArr[0]?.color
+              if (oc) {
+                if (needsTransparency) m.color.setRGB(oc.r * 0.5, oc.g * 0.5, oc.b * 0.5)
+                else                   m.color.copy(oc)
+              }
+            }
           } else {
             m.transparent = needsTransparency
             m.opacity     = op
@@ -1660,11 +1670,15 @@ export default {
       overrideMaterials = []
       const op = props.content?.modelOpacity ?? 1
       const needsTransparency = typeof op === 'number' && op < 1
+      const baseColor = new THREE.Color(color || '#cccccc')
       loadedModel.traverse(obj => {
         if (!obj.isMesh) return
-        const isHole = holeMeshNames.has(obj.name)
+        const isHole   = holeMeshNames.has(obj.name)
+        const holeColor = (isHole && needsTransparency)
+          ? baseColor.clone().multiplyScalar(0.5)
+          : baseColor
         const mat = new THREE.MeshStandardMaterial({
-          color:       new THREE.Color(color || '#cccccc'),
+          color:       holeColor,
           roughness:   0.35,
           metalness:   0.1,
           transparent: isHole ? false : needsTransparency,
