@@ -2729,15 +2729,21 @@ export default {
       pointerDownPos = { x: event.clientX, y: event.clientY }
     }
 
+    // hoverHoleMesh tracks the primary hit mesh; hoverHoleMeshes is the full group
+    let hoverHoleMeshes = []
+
     const clearHoleHover = () => {
       if (!hoverHoleMesh) return
-      const mats = Array.isArray(hoverHoleMesh.material) ? hoverHoleMesh.material : [hoverHoleMesh.material]
-      mats.forEach((m, i) => {
-        if (hoverHoleMats[i]) m.color.copy(hoverHoleMats[i])
-        m.needsUpdate = true
+      hoverHoleMeshes.forEach((mesh, mi) => {
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+        mats.forEach((m, i) => {
+          const saved = hoverHoleMats[mi]?.[i]
+          if (saved) { m.color.copy(saved); m.needsUpdate = true }
+        })
       })
-      hoverHoleMesh = null
-      hoverHoleMats = []
+      hoverHoleMesh   = null
+      hoverHoleMeshes = []
+      hoverHoleMats   = []
     }
 
     const onCanvasMouseMove = (event) => {
@@ -2750,20 +2756,31 @@ export default {
         -((event.clientY - rect.top)  / rect.height) * 2 + 1
       )
       raycaster.setFromCamera(mouse, activeCamera || camera)
-      const hits = raycaster.intersectObjects(holeMeshArray, true)
+      const hits    = raycaster.intersectObjects(holeMeshArray, true)
       const hitMesh = hits.length > 0 ? hits[0].object : null
 
       if (hitMesh === hoverHoleMesh) return   // no change
-
       clearHoleHover()
+      if (!hitMesh) return
 
-      if (hitMesh) {
-        hoverHoleMesh = hitMesh
-        const hoverColor = new THREE.Color('#0a2a6e')
-        const mats = Array.isArray(hitMesh.material) ? hitMesh.material : [hitMesh.material]
-        hoverHoleMats = mats.map(m => m.color.clone())
+      // Resolve all sibling meshes that belong to the same logical hole
+      const fi       = hits[0].faceIndex ?? 0
+      const groupIdx = getGroupIndex(hitMesh, fi)
+      const faceData = getFaceData(hitMesh.name || '', groupIdx)
+      const siblingNames = faceData?.meshNames ?? [hitMesh.name]
+      const groupMeshes  = siblingNames
+        .map(n => clickableMeshes.find(m => m.name === n))
+        .filter(Boolean)
+
+      hoverHoleMesh   = hitMesh
+      hoverHoleMeshes = groupMeshes
+      const hoverColor = new THREE.Color('#0a2a6e')
+      hoverHoleMats = groupMeshes.map(mesh => {
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+        const saved = mats.map(m => m.color.clone())
         mats.forEach(m => { m.color.copy(hoverColor); m.needsUpdate = true })
-      }
+        return saved
+      })
     }
 
     const onCanvasClick = (event) => {
