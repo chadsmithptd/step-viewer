@@ -926,4 +926,10 @@ export default {
       event: { id: '' },
     },
   ],
+  actions: [
+    {
+      name: 'clearAllSelections',
+      label: { en: 'Clear All Selections' },
+    },
+  ],
 }

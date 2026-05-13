@@ -3511,6 +3511,7 @@ export default {
       showBoundingBox, showBoundingBoxButton, bboxLabelsRef, toggleBoundingBox,
       // Handlers
       onPointerDown, onCanvasClick,
+      clearAllSelections,
       resetCamera, rotateLeft, rotateRight,
       triggerFileUpload, onFileSelected, onDragOver, onDragLeave, onDrop,
       /* wwEditor:start */
