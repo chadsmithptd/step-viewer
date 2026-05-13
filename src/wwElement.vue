@@ -1573,6 +1573,10 @@ export default {
           if (m) overlays.push(makeOverlayMesh(m, 0, color, -2, dt))
         }
       }
+      // Holes share renderOrder 2 with their own meshes in opacity/override mode; promote
+      // selection overlays to renderOrder 4 so they always paint after hole meshes and are
+      // never buried by the transparent depth-sort flip when the camera rotates.
+      if (isHole) overlays.forEach(o => { o.renderOrder = 4 })
       return overlays
     }
 
