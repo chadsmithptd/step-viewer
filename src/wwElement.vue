@@ -89,6 +89,16 @@
         </svg>
       </button>
       <button v-if="show2DToggle && modelLoaded" class="ctrl-btn ctrl-btn--2d" :class="{ 'ctrl-btn--active': is2DMode }" title="2D Drawing View" @click="toggle2DMode">2D</button>
+      <button v-if="showZoomButtons" class="ctrl-btn" title="Zoom In" @click="zoomIn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+        </svg>
+      </button>
+      <button v-if="showZoomButtons" class="ctrl-btn" title="Zoom Out" @click="zoomOut">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
+        </svg>
+      </button>
       <button v-if="showBoundingBoxButton && modelLoaded" class="ctrl-btn" :class="{ 'ctrl-btn--active': showBoundingBox }" title="Bounding Box Dimensions" @click="toggleBoundingBox">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
@@ -433,6 +443,7 @@ export default {
     const showToleranceButton   = computed(() => props.content?.showToleranceButton !== false)
     const show2DToggle          = computed(() => props.content?.show2DToggle !== false)
     const showBoundingBoxButton = computed(() => props.content?.showBoundingBoxButton !== false)
+    const showZoomButtons       = computed(() => props.content?.showZoomButtons !== false)
 
     // Resolved annotation array — handles formula field mapping
     const processedAnnotations = computed(() => {
@@ -2403,7 +2414,7 @@ export default {
       activeCamera = camera
 
       controls = new TrackballControls(camera, renderer.domElement)
-      controls.rotateSpeed  = 2.5
+      controls.rotateSpeed  = props.content?.rotateSpeed ?? 2.5
       controls.zoomSpeed    = 1.2
       controls.panSpeed     = 0.8
       controls.staticMoving = true
@@ -2934,6 +2945,23 @@ export default {
     }
     const rotateLeft  = () => rotateDeg(-45)
     const rotateRight = () => rotateDeg(45)
+
+    const zoomIn  = () => {
+      if (!camera || !controls) return
+      const offset = camera.position.clone().sub(controls.target)
+      camera.position.copy(controls.target).addScaledVector(offset, 0.8)
+      controls.update()
+    }
+    const zoomOut = () => {
+      if (!camera || !controls) return
+      const offset = camera.position.clone().sub(controls.target)
+      camera.position.copy(controls.target).addScaledVector(offset, 1.25)
+      controls.update()
+    }
+
+    watch(() => props.content?.rotateSpeed, (val) => {
+      if (controls) controls.rotateSpeed = (typeof val === 'number' && val > 0) ? val : 2.5
+    })
 
     // Focus the camera on a specific hole, looking along its axis from the open end
     const focusOnHole = (hole) => {
@@ -3509,10 +3537,11 @@ export default {
       toggleToleranceMode, confirmTolerance, cancelTolerance: clearPendingTolerance, removeToleranceEntry,
       // Bounding box
       showBoundingBox, showBoundingBoxButton, bboxLabelsRef, toggleBoundingBox,
+      showZoomButtons,
       // Handlers
       onPointerDown, onCanvasClick,
       clearAllSelections,
-      resetCamera, rotateLeft, rotateRight,
+      resetCamera, rotateLeft, rotateRight, zoomIn, zoomOut,
       triggerFileUpload, onFileSelected, onDragOver, onDragLeave, onDrop,
       /* wwEditor:start */
       isEditing,

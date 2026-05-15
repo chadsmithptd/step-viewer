@@ -514,6 +514,35 @@ export default {
       /* wwEditor:end */
     },
 
+    showZoomButtons: {
+      label: { en: 'Show Zoom Buttons' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Show or hide the zoom in / zoom out buttons in the left controls panel.',
+      },
+      /* wwEditor:end */
+    },
+
+    rotateSpeed: {
+      label: { en: 'Rotate Speed' },
+      type: 'Number',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 2.5,
+      options: { min: 0.5, max: 10, step: 0.5 },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'number',
+        tooltip: 'Controls how fast the model spins when the user clicks and drags. Default is 2.5.',
+      },
+      /* wwEditor:end */
+    },
+
     bboxColor: {
       label: { en: 'Bounding Box Color' },
       type: 'Color',
