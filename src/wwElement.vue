@@ -231,7 +231,7 @@ export default {
     /* wwEditor:end */
   },
   emits: ['trigger-event'],
-  setup(props, { emit }) {
+  setup(props, { emit, expose }) {
     // ─── DOM refs ────────────────────────────────────────────────────────────
     const rootRef         = ref(null)
     const canvasRef       = ref(null)
@@ -3516,6 +3516,8 @@ export default {
       if (loadedModel) disposeObject(loadedModel)
       if (renderer) { renderer.dispose(); renderer.forceContextLoss() }
     })
+
+    expose({ clearAllSelections })
 
     return {
       // DOM
