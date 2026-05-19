@@ -104,6 +104,11 @@
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
         </svg>
       </button>
+      <button v-if="showClearSelectionsButton && selectionLabel" class="ctrl-btn" title="Clear Selections" @click="clearAllSelections">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
     </div>
 
     <!-- 2D view axis selector -->
@@ -439,11 +444,12 @@ export default {
     }))
 
     const showBadgeLabel        = computed(() => props.content?.showBadgeLabel !== false)
-    const showUploadButton      = computed(() => props.content?.showUploadButton !== false)
-    const showToleranceButton   = computed(() => props.content?.showToleranceButton !== false)
-    const show2DToggle          = computed(() => props.content?.show2DToggle !== false)
-    const showBoundingBoxButton = computed(() => props.content?.showBoundingBoxButton !== false)
-    const showZoomButtons       = computed(() => props.content?.showZoomButtons !== false)
+    const showUploadButton            = computed(() => props.content?.showUploadButton !== false)
+    const showToleranceButton         = computed(() => props.content?.showToleranceButton !== false)
+    const show2DToggle                = computed(() => props.content?.show2DToggle !== false)
+    const showBoundingBoxButton       = computed(() => props.content?.showBoundingBoxButton !== false)
+    const showZoomButtons             = computed(() => props.content?.showZoomButtons !== false)
+    const showClearSelectionsButton   = computed(() => props.content?.showClearSelectionsButton !== false)
 
     // Resolved annotation array — handles formula field mapping
     const processedAnnotations = computed(() => {
@@ -3540,7 +3546,7 @@ export default {
       toggleToleranceMode, confirmTolerance, cancelTolerance: clearPendingTolerance, removeToleranceEntry,
       // Bounding box
       showBoundingBox, showBoundingBoxButton, bboxLabelsRef, toggleBoundingBox,
-      showZoomButtons,
+      showZoomButtons, showClearSelectionsButton,
       // Handlers
       onPointerDown, onCanvasClick,
       clearAllSelections,

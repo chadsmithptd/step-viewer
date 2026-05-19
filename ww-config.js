@@ -528,6 +528,20 @@ export default {
       /* wwEditor:end */
     },
 
+    showClearSelectionsButton: {
+      label: { en: 'Show Clear Selections Button' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Show or hide the clear selections button in the left controls panel. Button only appears when faces are selected.',
+      },
+      /* wwEditor:end */
+    },
+
     rotateSpeed: {
       label: { en: 'Rotate Speed' },
       type: 'Number',
