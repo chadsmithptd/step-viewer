@@ -528,17 +528,18 @@ export default {
       /* wwEditor:end */
     },
 
-    showClearSelectionsButton: {
-      label: { en: 'Show Clear Selections Button' },
+    clearSelectionsTrigger: {
+      label: { en: 'Clear Selections Trigger' },
       type: 'OnOff',
       section: 'settings',
       bindable: true,
-      defaultValue: true,
+      defaultValue: false,
       /* wwEditor:start */
       bindingValidation: {
         type: 'boolean',
-        tooltip: 'Show or hide the clear selections button in the left controls panel. Button only appears when faces are selected.',
+        tooltip: 'Bind this to a WeWeb variable. Toggle the variable from any button workflow to clear all face selections.',
       },
+      propertyHelp: 'Bind to a variable and toggle it from a button workflow to clear all selections.',
       /* wwEditor:end */
     },
 
