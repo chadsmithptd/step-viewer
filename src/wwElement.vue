@@ -2556,6 +2556,8 @@ export default {
           gltf = await new Promise((res, rej) => loader.parse(buf, '', res, rej))
         } else if (isHttpUrl(glbData)) {
           gltf = await new Promise((res, rej) => loader.load(glbData, res, undefined, rej))
+        } else if (typeof glbData === 'string' && glbData.trimStart().startsWith('{')) {
+          gltf = await new Promise((res, rej) => loader.parse(glbData, '', res, rej))
         } else {
           const buf = decodeBase64ToBuffer(glbData)
           gltf = await new Promise((res, rej) => loader.parse(buf, '', res, rej))
