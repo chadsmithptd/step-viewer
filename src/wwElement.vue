@@ -2521,6 +2521,7 @@ export default {
     // ─── Model loading ────────────────────────────────────────────────────────
     const loadModel = async (glbData) => {
       if (!glbData || !scene) return
+      console.log('STEP Viewer: loadModel called, type=', typeof glbData, 'starts=', typeof glbData === 'string' ? glbData.slice(0, 20) : glbData)
 
       isLoading.value  = true
       loadingMsg.value = 'Loading model…'
@@ -2557,6 +2558,7 @@ export default {
         } else if (isHttpUrl(glbData)) {
           gltf = await new Promise((res, rej) => loader.load(glbData, res, undefined, rej))
         } else if (typeof glbData === 'string' && glbData.trimStart().startsWith('{')) {
+          console.log('STEP Viewer: loading as glTF JSON, length=', glbData.length)
           gltf = await new Promise((res, rej) => loader.parse(glbData, '', res, rej))
         } else {
           const buf = decodeBase64ToBuffer(glbData)
