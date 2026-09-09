@@ -1,5 +1,5 @@
 <template>
-  <div ref="rootRef" class="step-viewer" :style="rootStyle">
+  <div ref="rootRef" class="step-viewer">
     <!-- Main WebGL canvas -->
     <canvas
       ref="canvasRef"
@@ -425,19 +425,6 @@ export default {
     let featureOverlayMap   = new Map()
 
     // ─── Computed ─────────────────────────────────────────────────────────────
-    const rootStyle = computed(() => ({
-      width:      '100%',
-      height:     '100%',
-      position:   'relative',
-      overflow:   'hidden',
-      background: props.content?.backgroundColor || 'transparent',
-      '--ctrl-panel-bg':          props.content?.controlsPanelBg       || '#0D0D0D',
-      '--ctrl-btn-color':         props.content?.controlsBtnColor       || '#ffffff',
-      '--ctrl-btn-active-bg':     props.content?.controlsBtnActiveBg    || 'rgba(59,130,246,0.25)',
-      '--ctrl-btn-active-color':  props.content?.controlsBtnActiveColor || '#3b82f6',
-      '--bbox-color':             props.content?.bboxColor              || '#00e5ff',
-    }))
-
     const showBadgeLabel        = computed(() => props.content?.showBadgeLabel !== false)
     const showUploadButton            = computed(() => props.content?.showUploadButton !== false)
     const showToleranceButton         = computed(() => props.content?.showToleranceButton !== false)
@@ -3536,7 +3523,6 @@ export default {
       // UI
       isLoading, loadingMsg, errorMsg, selectionLabel, libsReady,
       modelLoaded, isDragging,
-      rootStyle,
       // Phase 3: badge layer
       showAnnotationBadges, processedAnnotations, showBadgeLabel, showUploadButton, showToleranceButton,
       // 2D drawing mode
@@ -3565,6 +3551,8 @@ export default {
 <style lang="scss" scoped>
 .step-viewer {
   display: block;
+  position: relative;
+  overflow: hidden;
   box-sizing: border-box;
   font-family: Arial, sans-serif;
 

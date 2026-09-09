@@ -3,6 +3,16 @@ export default {
     label: { en: 'STEP Viewer' },
     icon: 'cube',
   },
+  css({ content }) {
+    return [
+      { property: 'background', value: content.backgroundColor },
+      { property: '--ctrl-panel-bg', value: content.controlsPanelBg },
+      { property: '--ctrl-btn-color', value: content.controlsBtnColor },
+      { property: '--ctrl-btn-active-bg', value: content.controlsBtnActiveBg },
+      { property: '--ctrl-btn-active-color', value: content.controlsBtnActiveColor },
+      { property: '--bbox-color', value: content.bboxColor },
+    ]
+  },
   properties: {
     glbData: {
       label: { en: 'GLB Data' },
