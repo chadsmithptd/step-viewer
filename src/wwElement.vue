@@ -2434,6 +2434,7 @@ export default {
 
       resizeObserver = new ResizeObserver(onResize)
       resizeObserver.observe(rootRef.value)
+      syncTrackballScreen()
 
       animate()
     }
@@ -2479,6 +2480,21 @@ export default {
       camera.updateProjectionMatrix()
     }
 
+    // TrackballControls caches canvas bounds at construct time; keep them in sync with layout.
+    const syncTrackballScreen = () => {
+      if (!controls?.domElement) return
+      const el = controls.domElement
+      const box = el.getBoundingClientRect()
+      if (!box.width || !box.height) return
+      const win = getWin()
+      const docEl = el.ownerDocument?.documentElement
+      if (!docEl) return
+      controls.screen.left = box.left + win.pageXOffset - docEl.clientLeft
+      controls.screen.top = box.top + win.pageYOffset - docEl.clientTop
+      controls.screen.width = box.width
+      controls.screen.height = box.height
+    }
+
     // ─── Resize ───────────────────────────────────────────────────────────────
     const onResize = () => {
       if (!renderer || !rootRef.value) return
@@ -2488,6 +2504,7 @@ export default {
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h, false)
+      syncTrackballScreen()
       applyViewOffset()
       if (is2DMode.value && orthoCamera) {
         const aspect = w / h
@@ -2731,6 +2748,7 @@ export default {
 
     // ─── Canvas click → raycasting ────────────────────────────────────────────
     const onPointerDown = (event) => {
+      syncTrackballScreen()
       pointerDownPos = { x: event.clientX, y: event.clientY }
     }
 
@@ -3563,6 +3581,7 @@ export default {
     left: 0;
     width: 100%;
     height: 100%;
+    touch-action: none;
     cursor: default;
     &:active { cursor: default; }
   }
