@@ -468,20 +468,6 @@ export default {
       /* wwEditor:end */
     },
 
-    showUploadButton: {
-      label: { en: 'Show Upload Button' },
-      type: 'OnOff',
-      section: 'settings',
-      bindable: true,
-      defaultValue: true,
-      /* wwEditor:start */
-      bindingValidation: {
-        type: 'boolean',
-        tooltip: 'Show or hide the GLB upload button in the left controls panel.',
-      },
-      /* wwEditor:end */
-    },
-
     showToleranceButton: {
       label: { en: 'Show Tolerance Button' },
       type: 'OnOff',

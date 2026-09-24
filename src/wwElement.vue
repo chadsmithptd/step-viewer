@@ -20,36 +20,6 @@
       <span class="overlay-text">⚠ {{ errorMsg }}</span>
     </div>
 
-    <!-- Upload zone — shown whenever no model is loaded -->
-    <div
-      v-if="!modelLoaded && !isLoading"
-      class="viewer-overlay upload-zone"
-      @dragover.prevent="onDragOver"
-      @dragleave="onDragLeave"
-      @drop.prevent="onDrop"
-      :class="{ 'drag-active': isDragging }"
-      @click="triggerFileUpload"
-    >
-      <div class="upload-icon">
-        <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="17 8 12 3 7 8"/>
-          <line x1="12" y1="3" x2="12" y2="15"/>
-        </svg>
-      </div>
-      <span class="upload-title">Drop a GLB file here</span>
-      <span class="upload-sub">or click to browse</span>
-    </div>
-
-    <!-- Hidden file input -->
-    <input
-      ref="fileInputRef"
-      type="file"
-      accept=".glb,.gltf"
-      class="file-input-hidden"
-      @change="onFileSelected"
-    />
-
     <!-- Controls panel (center-right) -->
     <div v-show="libsReady" class="controls-panel">
       <button class="ctrl-btn" title="Reset View" @click="resetCamera">
@@ -68,13 +38,6 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="23 4 23 10 17 10"/>
           <path d="M20.49 15a9 9 0 1 1-.49-4.5"/>
-        </svg>
-      </button>
-      <button v-if="showUploadButton" class="ctrl-btn" title="Load GLB file" @click="triggerFileUpload">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="17 8 12 3 7 8"/>
-          <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
       </button>
       <button v-if="showToleranceButton" class="ctrl-btn" :class="{ 'ctrl-btn--active': toleranceMode }" title="Tolerance Mode" @click="toggleToleranceMode">
@@ -235,7 +198,6 @@ export default {
     // ─── DOM refs ────────────────────────────────────────────────────────────
     const rootRef         = ref(null)
     const canvasRef       = ref(null)
-    const fileInputRef    = ref(null)
     const badgeContainerRef = ref(null)
     const toleranceLabelContainerRef = ref(null)
     const bboxLabelContainerRef = ref(null)
@@ -247,7 +209,6 @@ export default {
     const selectionLabel = ref('')
     const libsReady      = ref(false)
     const modelLoaded    = ref(false)
-    const isDragging     = ref(false)
 
     const showBoundingBox          = ref(false)
     const bboxLabelsRef            = ref([])
@@ -426,7 +387,6 @@ export default {
 
     // ─── Computed ─────────────────────────────────────────────────────────────
     const showBadgeLabel        = computed(() => props.content?.showBadgeLabel !== false)
-    const showUploadButton            = computed(() => props.content?.showUploadButton !== false)
     const showToleranceButton         = computed(() => props.content?.showToleranceButton !== false)
     const show2DToggle                = computed(() => props.content?.show2DToggle !== false)
     const showBoundingBoxButton       = computed(() => props.content?.showBoundingBoxButton !== false)
@@ -2901,30 +2861,6 @@ export default {
     const onKeyDown = (e) => { if (e.key === 'Shift') isShiftHeld = true }
     const onKeyUp   = (e) => { if (e.key === 'Shift') isShiftHeld = false }
 
-    // ─── File upload ──────────────────────────────────────────────────────────
-    const triggerFileUpload = () => fileInputRef.value?.click()
-
-    const loadFile = async (file) => {
-      if (!file) return
-      const blobUrl = URL.createObjectURL(file)
-      await loadModel(blobUrl)
-      URL.revokeObjectURL(blobUrl)
-    }
-
-    const onFileSelected = async (event) => {
-      const file = event.target.files?.[0]
-      if (!file) return
-      event.target.value = ''
-      await loadFile(file)
-    }
-
-    const onDragOver  = () => { isDragging.value = true }
-    const onDragLeave = () => { isDragging.value = false }
-    const onDrop = async (event) => {
-      isDragging.value = false
-      await loadFile(event.dataTransfer?.files?.[0])
-    }
-
     // ─── Camera controls ──────────────────────────────────────────────────────
     const resetCamera = () => {
       if (!camera || !defaultCameraPos) return
@@ -3535,14 +3471,14 @@ export default {
 
     return {
       // DOM
-      rootRef, canvasRef, fileInputRef, badgeContainerRef,
+      rootRef, canvasRef, badgeContainerRef,
       toleranceLabelContainerRef, bboxLabelContainerRef,
       content: props.content,
       // UI
       isLoading, loadingMsg, errorMsg, selectionLabel, libsReady,
-      modelLoaded, isDragging,
+      modelLoaded,
       // Phase 3: badge layer
-      showAnnotationBadges, processedAnnotations, showBadgeLabel, showUploadButton, showToleranceButton,
+      showAnnotationBadges, processedAnnotations, showBadgeLabel, showToleranceButton,
       // 2D drawing mode
       is2DMode, current2DView, show2DToggle, toggle2DMode, set2DView,
       // Tolerance mode
@@ -3557,7 +3493,6 @@ export default {
       onPointerDown, onCanvasClick,
       clearAllSelections,
       resetCamera, rotateLeft, rotateRight, zoomIn, zoomOut,
-      triggerFileUpload, onFileSelected, onDragOver, onDragLeave, onDrop,
       /* wwEditor:start */
       isEditing,
       /* wwEditor:end */
@@ -3611,41 +3546,6 @@ export default {
   .error-overlay {
     background: rgba(255, 240, 240, 0.92);
     .overlay-text { color: #c0392b; }
-  }
-
-  // ── Upload zone ────────────────────────────────────────────────────────────
-  .upload-zone {
-    background: rgba(246, 249, 252, 0.97);
-    gap: 10px;
-    cursor: pointer;
-    border: 2px dashed #c5d5e8;
-    transition: background 0.15s, border-color 0.15s;
-
-    &:hover, &.drag-active {
-      background: rgba(232, 242, 255, 0.97);
-      border-color: #1a73e8;
-
-      .upload-icon svg { stroke: #1a73e8; }
-      .upload-title { color: #1a73e8; }
-    }
-
-    .upload-icon svg { stroke: #8faec8; transition: stroke 0.15s; }
-
-    .upload-title {
-      font-size: 15px;
-      font-weight: 600;
-      color: #3a5068;
-      transition: color 0.15s;
-    }
-
-    .upload-sub {
-      font-size: 12px;
-      color: #8faec8;
-    }
-  }
-
-  .file-input-hidden {
-    display: none;
   }
 
   .spinner {
