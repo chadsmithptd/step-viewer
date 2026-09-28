@@ -3582,10 +3582,10 @@ export default {
     align-items: center;
     gap: 4px;
     z-index: 10;
-    background: var(--ctrl-panel-bg, #0D0D0D);
-    border-radius: 8px;
-    padding: 4px;
-    overflow: hidden;
+    background: transparent;
+    border-radius: 0;
+    padding: 0;
+    overflow: visible;
   }
 
   .ctrl-btn {
