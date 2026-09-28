@@ -29,18 +29,6 @@
           <polyline points="9 22 9 12 15 12 15 22"/>
         </svg>
       </button>
-      <button class="ctrl-btn" title="Rotate Left" @click="rotateLeft">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="1 4 1 10 7 10"/>
-          <path d="M3.51 15a9 9 0 1 0 .49-4.5"/>
-        </svg>
-      </button>
-      <button class="ctrl-btn" title="Rotate Right" @click="rotateRight">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="23 4 23 10 17 10"/>
-          <path d="M20.49 15a9 9 0 1 1-.49-4.5"/>
-        </svg>
-      </button>
       <button v-if="showToleranceButton" class="ctrl-btn" :class="{ 'ctrl-btn--active': toleranceMode }" title="Tolerance Mode" @click="toggleToleranceMode">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="3" y1="4" x2="3" y2="20"/>
@@ -2903,23 +2891,6 @@ export default {
       emit('trigger-event', { name: 'view-reset', event: {} })
     }
 
-    const rotateDeg = (deg) => {
-      if (!camera || !controls) return
-      const angle  = (deg * Math.PI) / 180
-      const offset = camera.position.clone().sub(controls.target)
-      const cos    = Math.cos(angle)
-      const sin    = Math.sin(angle)
-      camera.position.set(
-        controls.target.x + cos * offset.x + sin * offset.z,
-        camera.position.y,
-        controls.target.z - sin * offset.x + cos * offset.z
-      )
-      camera.lookAt(controls.target)
-      controls.update()
-    }
-    const rotateLeft  = () => rotateDeg(-45)
-    const rotateRight = () => rotateDeg(45)
-
     const zoomIn  = () => {
       if (!camera || !controls) return
       const offset = camera.position.clone().sub(controls.target)
@@ -3534,7 +3505,7 @@ export default {
       // Handlers
       onPointerDown, onCanvasClick,
       clearAllSelections,
-      resetCamera, rotateLeft, rotateRight, zoomIn, zoomOut,
+      resetCamera, zoomIn, zoomOut,
       /* wwEditor:start */
       isEditing,
       /* wwEditor:end */
