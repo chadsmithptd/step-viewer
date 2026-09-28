@@ -173,6 +173,29 @@ export default {
       /* wwEditor:end */
     },
 
+    // Icon slots — drop your own WeWeb icon/button content in place of the built-in SVGs
+    homeButtonContent: {
+      hidden: true,
+      defaultValue: [],
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Drop a WeWeb icon or element to replace the built-in home button icon',
+      },
+      /* wwEditor:end */
+    },
+
+    boundingBoxButtonContent: {
+      hidden: true,
+      defaultValue: [],
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Drop a WeWeb icon or element to replace the built-in bounding box button icon',
+      },
+      /* wwEditor:end */
+    },
+
     showBadgeLabel: {
       label: { en: 'Show Badge Label Text' },
       type: 'OnOff',
@@ -464,6 +487,50 @@ export default {
       bindingValidation: {
         type: 'boolean',
         tooltip: 'Toggle tolerance measurement mode on/off. Can be bound to an external button or toggle.',
+      },
+      /* wwEditor:end */
+    },
+
+    resetViewTrigger: {
+      label: { en: 'Reset View Trigger' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Bind to a variable. Toggle it from your own button to reset the camera to the home view.',
+      },
+      propertyHelp: 'Use your own WeWeb button: bind a boolean variable here and toggle that variable in the button workflow. Turn off Show Home Button to hide the built-in icon.',
+      /* wwEditor:end */
+    },
+
+    boundingBoxEnabled: {
+      label: { en: 'Bounding Box Visible' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Bind to a variable to show or hide the bounding box from your own button.',
+      },
+      propertyHelp: 'Bind a boolean. true shows the bounding box and dimension labels; false hides them. Turn off Show Bounding Box Button to hide the built-in icon.',
+      /* wwEditor:end */
+    },
+
+    showHomeButton: {
+      label: { en: 'Show Home Button' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'Show or hide the built-in home (reset view) button in the left controls panel.',
       },
       /* wwEditor:end */
     },
@@ -965,11 +1032,29 @@ export default {
       label: { en: 'On Tolerance Removed' },
       event: { id: '' },
     },
+    {
+      name: 'view-reset',
+      label: { en: 'On View Reset' },
+      event: {},
+    },
+    {
+      name: 'bounding-box-change',
+      label: { en: 'On Bounding Box Change' },
+      event: { visible: false },
+    },
   ],
   actions: [
     {
       name: 'clearAllSelections',
       label: { en: 'Clear All Selections' },
+    },
+    {
+      name: 'resetView',
+      label: { en: 'Reset View' },
+    },
+    {
+      name: 'toggleBoundingBox',
+      label: { en: 'Toggle Bounding Box' },
     },
   ],
 }

@@ -22,8 +22,9 @@
 
     <!-- Controls panel (center-right) -->
     <div v-show="libsReady" class="controls-panel">
-      <button class="ctrl-btn" title="Reset View" @click="resetCamera">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button v-if="showHomeButton" class="ctrl-btn" title="Reset View" @click="resetCamera">
+        <wwLayout path="homeButtonContent" direction="row" class="ctrl-btn-dropzone" />
+        <svg v-show="!hasHomeButtonContent" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>
         </svg>
@@ -62,8 +63,9 @@
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
         </svg>
       </button>
-      <button v-if="showBoundingBoxButton && modelLoaded" class="ctrl-btn" :class="{ 'ctrl-btn--active': showBoundingBox }" title="Bounding Box Dimensions" @click="toggleBoundingBox">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button v-if="showBoundingBoxButton" class="ctrl-btn" :class="{ 'ctrl-btn--active': showBoundingBox }" title="Bounding Box Dimensions" @click="toggleBoundingBox">
+        <wwLayout path="boundingBoxButtonContent" direction="row" class="ctrl-btn-dropzone" />
+        <svg v-show="!hasBoundingBoxButtonContent" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
         </svg>
       </button>
@@ -326,6 +328,11 @@ export default {
       : null
     const set2DModeVar = (val) => _ww2DModeVar?.setValue?.(val)
 
+    const _wwBBoxVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({ uid: props.uid, name: 'boundingBoxVisible', type: 'boolean', defaultValue: false })
+      : null
+    const setBoundingBoxVar = (val) => _wwBBoxVar?.setValue?.(val === true)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -389,8 +396,18 @@ export default {
     const showBadgeLabel        = computed(() => props.content?.showBadgeLabel !== false)
     const showToleranceButton         = computed(() => props.content?.showToleranceButton !== false)
     const show2DToggle                = computed(() => props.content?.show2DToggle !== false)
-    const showBoundingBoxButton       = computed(() => props.content?.showBoundingBoxButton !== false)
+    const showHomeButton              = computed(() => props.content?.showHomeButton !== false)
+    const showBoundingBoxButton       = computed(() => {
+      if (props.content?.showBoundingBoxButton === false) return false
+      /* wwEditor:start */
+      // Keep the slot mounted in the editor so a custom icon can be dropped before a model loads
+      if (props.wwEditorState) return true
+      /* wwEditor:end */
+      return modelLoaded.value === true
+    })
     const showZoomButtons             = computed(() => props.content?.showZoomButtons !== false)
+    const hasHomeButtonContent        = computed(() => Array.isArray(props.content?.homeButtonContent) && props.content.homeButtonContent.length > 0)
+    const hasBoundingBoxButtonContent = computed(() => Array.isArray(props.content?.boundingBoxButtonContent) && props.content.boundingBoxButtonContent.length > 0)
 
     // Resolved annotation array — handles formula field mapping
     const processedAnnotations = computed(() => {
@@ -714,10 +731,21 @@ export default {
       bboxLabelsRef.value = bboxLabelPoints.map(p => ({ text: p.text, axis: p.axis }))
     }
 
-    const toggleBoundingBox = () => {
-      showBoundingBox.value = !showBoundingBox.value
-      if (showBoundingBox.value && currentBbox) buildBoundingBox(currentBbox)
+    const applyBoundingBoxVisibility = (visible) => {
+      const next = visible === true
+      if (showBoundingBox.value === next) {
+        if (next && currentBbox && !bboxHelper) buildBoundingBox(currentBbox)
+        return
+      }
+      showBoundingBox.value = next
+      if (next && currentBbox) buildBoundingBox(currentBbox)
       else clearBoundingBox()
+      setBoundingBoxVar(next)
+      emit('trigger-event', { name: 'bounding-box-change', event: { visible: next } })
+    }
+
+    const toggleBoundingBox = () => {
+      applyBoundingBoxVisibility(!showBoundingBox.value)
     }
 
     const updateBboxLabelPositions = () => {
@@ -2872,6 +2900,7 @@ export default {
         progress:    0,
       }
       deselectMesh()
+      emit('trigger-event', { name: 'view-reset', event: {} })
     }
 
     const rotateDeg = (deg) => {
@@ -3335,6 +3364,18 @@ export default {
       clearAllSelections()
     })
 
+    watch(() => props.content?.resetViewTrigger, (val, oldVal) => {
+      // Ignore the first resolve from undefined so binding hydration does not move the camera
+      if (oldVal === undefined) return
+      if (val === oldVal) return
+      resetCamera()
+    })
+
+    watch(() => props.content?.boundingBoxEnabled, (val) => {
+      if (typeof val !== 'boolean') return
+      applyBoundingBoxVisibility(val)
+    }, { immediate: true })
+
     watch(() => props.content?.annotationColor, (color) => {
       annotationOverlays
         .filter(a => a.annotationId !== activeAnnotationId)
@@ -3467,7 +3508,7 @@ export default {
     })
 
     // Expose callable actions to WeWeb workflow engine
-    expose({ clearAllSelections })
+    expose({ clearAllSelections, resetView: resetCamera, toggleBoundingBox })
 
     return {
       // DOM
@@ -3488,6 +3529,7 @@ export default {
       toggleToleranceMode, confirmTolerance, cancelTolerance: clearPendingTolerance, removeToleranceEntry,
       // Bounding box
       showBoundingBox, showBoundingBoxButton, bboxLabelsRef, toggleBoundingBox,
+      showHomeButton, hasHomeButtonContent, hasBoundingBoxButtonContent,
       showZoomButtons,
       // Handlers
       onPointerDown, onCanvasClick,
@@ -3576,6 +3618,7 @@ export default {
   }
 
   .ctrl-btn {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3597,6 +3640,27 @@ export default {
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.03em;
+    }
+  }
+
+  .ctrl-btn-dropzone {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+
+    &:empty {
+      display: none;
+    }
+
+    :deep(img),
+    :deep(svg) {
+      width: 16px;
+      height: 16px;
+      max-width: 16px;
+      max-height: 16px;
     }
   }
 
