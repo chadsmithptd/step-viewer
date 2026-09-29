@@ -53,9 +53,171 @@ export default {
       /* wwEditor:start */
       bindingValidation: {
         type: 'object',
-        tooltip: 'Bind a hole object from the holes variable. Must include center {x,y,z} and axis {x,y,z}.',
+        tooltip: 'Bind a hole object from the holes variable (center {x,y,z} + axis {x,y,z}), or a Backend Holes item (matched by id; center/axis arrays in Backend Hole Units).',
       },
       propertyHelp: 'When changed, the camera animates to look into this hole. Bind to a variable updated on list-item click.',
+      /* wwEditor:end */
+    },
+
+    holes: {
+      label: { en: 'Backend Holes' },
+      type: 'Array',
+      section: 'settings',
+      bindable: true,
+      defaultValue: [],
+      options: {
+        expandable: true,
+        getItemLabel(item) {
+          const d = typeof item?.diameter === 'number' ? ` Ø${item.diameter.toFixed(3)}` : ''
+          return `Hole ${item?.id ?? '?'}${d}${item?.hole_type ? ' · ' + item.hole_type : ''}`
+        },
+        item: {
+          type: 'Object',
+          defaultValue: { id: 1, center: [0, 0, 0], axis: [0, 0, 1], diameter: 0.25, depth: 0.5, through: true, hole_type: null, thread_spec: null },
+          options: {
+            item: {
+              id:          { label: { en: 'ID' },          type: 'Number' },
+              center:      { label: { en: 'Center [x,y,z]' }, type: 'Array' },
+              axis:        { label: { en: 'Axis [x,y,z]' },   type: 'Array' },
+              diameter:    { label: { en: 'Diameter' },    type: 'Number' },
+              depth:       { label: { en: 'Depth' },       type: 'Number' },
+              through:     { label: { en: 'Through' },     type: 'OnOff' },
+              hole_type:   { label: { en: 'Hole Type' },   type: 'Text' },
+              thread_spec: { label: { en: 'Thread Spec' }, type: 'Text' },
+            },
+          },
+        },
+      },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'array',
+        tooltip: 'Bind to the holes array of GET cad_holes/holes. Each item: { id, center: [x,y,z], axis: [x,y,z], diameter, depth, through, hole_type, thread_spec }. center/axis may also be {x,y,z}. Lengths use Backend Hole Units.',
+      },
+      propertyHelp: 'Holes detected by the backend (stable ids). The viewer matches each one to its mesh faces, colors it by hole_type, and reports the id in On Hole Clicked / On Holes Selected / On Face Selected (holeId). Leave empty to keep the viewer-only behavior.',
+      /* wwEditor:end */
+    },
+
+    holeUnits: {
+      label: { en: 'Backend Hole Units' },
+      type: 'TextSelect',
+      section: 'settings',
+      bindable: true,
+      defaultValue: 'in',
+      options: {
+        options: [
+          { value: 'in', label: { en: 'Inches (× 25.4 → model mm)' } },
+          { value: 'mm', label: { en: 'Millimeters (same as model)' } },
+        ],
+      },
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: "'in' or 'mm' — unit of the Backend Holes center/diameter/depth values. The GLB model is in millimeters.",
+      },
+      /* wwEditor:end */
+    },
+
+    showHoleTypeColors: {
+      label: { en: 'Color Backend Holes by Type' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: true,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'When true, every backend hole is tinted with the color for its hole_type.',
+      },
+      /* wwEditor:end */
+    },
+
+    holeColorUnassigned: {
+      label: { en: 'Hole Color — Unassigned' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#9aa0a6',
+      hidden: content => content?.showHoleTypeColors === false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Overlay color for backend holes where Holes with no hole_type yet (null / empty)..',
+      },
+      /* wwEditor:end */
+    },
+
+    holeColorSimple: {
+      label: { en: 'Hole Color — Simple (drilled)' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#1a73e8',
+      hidden: content => content?.showHoleTypeColors === false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Overlay color for backend holes where hole_type = simple.',
+      },
+      /* wwEditor:end */
+    },
+
+    holeColorTapped: {
+      label: { en: 'Hole Color — Tapped' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#e8710a',
+      hidden: content => content?.showHoleTypeColors === false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Overlay color for backend holes where hole_type = tapped.',
+      },
+      /* wwEditor:end */
+    },
+
+    holeColorReamed: {
+      label: { en: 'Hole Color — Reamed' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#9334e6',
+      hidden: content => content?.showHoleTypeColors === false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Overlay color for backend holes where hole_type = reamed.',
+      },
+      /* wwEditor:end */
+    },
+
+    holeColorCounterbore: {
+      label: { en: 'Hole Color — Counterbore' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#188038',
+      hidden: content => content?.showHoleTypeColors === false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Overlay color for backend holes where hole_type = counterbore.',
+      },
+      /* wwEditor:end */
+    },
+
+    holeColorIgnore: {
+      label: { en: 'Hole Color — Ignored' },
+      type: 'Color',
+      section: 'style',
+      bindable: true,
+      defaultValue: '#5f6368',
+      hidden: content => content?.showHoleTypeColors === false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'string',
+        tooltip: 'Overlay color for backend holes where hole_type = ignore.',
+      },
       /* wwEditor:end */
     },
 
@@ -938,6 +1100,8 @@ export default {
         merged:      false, // boolean — true when face was merged from split B-Rep halves
         mergedCount: null,  // number | null — how many raw faces were merged
         meshNames:   null,  // string[] | null — all mesh names for merged faces
+        holeId:      null,  // backend hole id (Backend Holes) this face belongs to, or null
+        hole:        null,  // the matching Backend Holes item, or null
       },
       default: true,
     },
@@ -947,6 +1111,7 @@ export default {
       event: {
         selections: [],   // each item includes all face-selected fields above
         count: 0,
+        holeIds: [],      // unique backend hole ids in the selection
       },
     },
     {
@@ -977,6 +1142,41 @@ export default {
         counterboreCount: 0,   // concave cylinders identified as counterbores
         pocketCount:      0,   // concave cylinders with L/D < 0.5 (wide, shallow)
         bossCount:        0,   // convex cylinders (pins, bosses)
+      },
+    },
+    {
+      name: 'hole-clicked',
+      label: { en: 'On Hole Clicked' },
+      event: {
+        id:          null,   // backend hole id — use for PATCH cad_holes/holes/{id}
+        hole:        {},     // the Backend Holes item as bound
+        diameter:    null,   // backend units
+        depth:       null,
+        through:     null,
+        hole_type:   null,
+        thread_spec: null,
+        selected:    true,   // false when a multi-select click removed it
+        matched:     true,   // false when the hole had no mesh match (clicked via its marker)
+        point:       { x: 0, y: 0, z: 0 },
+      },
+    },
+    {
+      name: 'holes-selected',
+      label: { en: 'On Holes Selection Changed' },
+      event: {
+        ids:   [],  // backend hole ids currently selected — use for PATCH cad_holes/holes/bulk_update
+        holes: [],  // the matching Backend Holes items
+        count: 0,
+      },
+    },
+    {
+      name: 'holes-matched',
+      label: { en: 'On Backend Holes Matched' },
+      event: {
+        total:        0,
+        matched:      0,
+        unmatched:    0,
+        unmatchedIds: [],
       },
     },
     {
@@ -1055,6 +1255,16 @@ export default {
     {
       name: 'toggleBoundingBox',
       label: { en: 'Toggle Bounding Box' },
+    },
+    {
+      name: 'focusHoleById',
+      label: { en: 'Focus Backend Hole' },
+      args: [{ name: 'id', type: 'Number' }],
+    },
+    {
+      name: 'selectHolesByIds',
+      label: { en: 'Select Backend Holes' },
+      args: [{ name: 'ids', type: 'Array' }],
     },
   ],
 }

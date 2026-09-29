@@ -321,6 +321,16 @@ export default {
       : null
     const setBoundingBoxVar = (val) => _wwBBoxVar?.setValue?.(val === true)
 
+    const _wwSelectedHoleIdsVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({ uid: props.uid, name: 'selectedHoleIds', type: 'array', defaultValue: [] })
+      : null
+    const setSelectedHoleIdsVar = (val) => _wwSelectedHoleIdsVar?.setValue?.(val)
+
+    const _wwHoleMatchesVar = (typeof wwLib !== 'undefined' && wwLib.wwVariable?.useComponentVariable)
+      ? wwLib.wwVariable.useComponentVariable({ uid: props.uid, name: 'backendHoleMatches', type: 'object', defaultValue: null })
+      : null
+    const setBackendHoleMatchesVar = (val) => _wwHoleMatchesVar?.setValue?.(val)
+
     // ─── Three.js objects (plain vars – no Vue reactivity overhead) ───────────
     let renderer       = null
     let scene          = null
@@ -379,6 +389,15 @@ export default {
     // MBD state — plain vars, no Vue reactivity overhead
     let currentFeatureModel = null
     let featureOverlayMap   = new Map()
+
+    // Backend holes state (bound `holes` property)
+    let backendHoles            = []          // normalized holes in model units (mm)
+    let backendHoleById         = new Map()   // id → normalized hole
+    let faceToHoleId            = new Map()   // facesData entry → backend hole id
+    let backendHoleTypeOverlays = []          // per-type color overlays on matched faces
+    let holeMarkers             = []          // clickable cylinders for unmatched holes
+    let pickedHoleIds           = new Set()   // selected backend hole ids
+    let pickedHoleOverlays      = new Map()   // id → selection overlays
 
     // ─── Computed ─────────────────────────────────────────────────────────────
     const showBadgeLabel        = computed(() => props.content?.showBadgeLabel !== false)
@@ -1527,6 +1546,7 @@ export default {
     const clearAllSelections = () => {
       selections.forEach(s => s.overlays?.forEach(o => removeOverlay(o)))
       selections = []
+      resetPickedHoles()
       selectionLabel.value = ''
     }
 
@@ -1555,8 +1575,17 @@ export default {
     }
 
     const updateSelectionLabel = () => {
-      if (selections.length === 0) {
+      const holeCount = pickedHoleIds.size
+      if (selections.length === 0 && holeCount === 0) {
         selectionLabel.value = ''
+      } else if (selections.length === 0 && holeCount === 1) {
+        const id   = [...pickedHoleIds][0]
+        const type = backendHoleById.get(id)?.raw?.hole_type
+        selectionLabel.value = `Hole ${id}${type ? ` · ${type}` : ''}`
+      } else if (selections.length === 0) {
+        selectionLabel.value = `${holeCount} holes selected`
+      } else if (holeCount > 0) {
+        selectionLabel.value = `${selections.length} faces, ${holeCount} holes selected`
       } else if (selections.length === 1) {
         selectionLabel.value = selections[0].meshName || `Group ${selections[0].groupIndex}`
       } else {
@@ -1590,13 +1619,16 @@ export default {
           merged:      fd?.merged       ?? false,
           mergedCount: fd?.mergedCount  ?? null,
           meshNames:   fd?.meshNames    ?? null,
+          holeId:      (fd && faceToHoleId.get(fd)) ?? null,
         }
       })
+      const holeIds = [...new Set([...data.map(d => d.holeId).filter(id => id !== null), ...pickedHoleIds])]
       emit('trigger-event', {
         name:  'faces-selected',
-        event: { selections: data, count: data.length },
+        event: { selections: data, count: data.length, holeIds },
       })
       setMultiSelectionVar(data)
+      emitHolesSelected()
     }
 
     // ─── Color override ───────────────────────────────────────────────────────
@@ -2520,6 +2552,9 @@ export default {
       removeEdges()
       clearCornerOverlays()
       clearFeatureOverlays()
+      clearBackendHoleVisuals()
+      pickedHoleIds      = new Set()
+      faceToHoleId       = new Map()
       removeDrawingEdges()
       if (is2DMode.value) exit2DMode()
       facesData          = []
@@ -2702,6 +2737,9 @@ export default {
         // ── Phase 2: Build feature overlays ──────────────────────────────────
         buildFeatureOverlays()
 
+        // Match bound backend holes (stable ids) to the faces just analyzed
+        buildBackendHoles()
+
         if (showBoundingBox.value) buildBoundingBox(box)
 
         emit('trigger-event', {
@@ -2764,6 +2802,27 @@ export default {
         ? (holeEnabled ? allHits : allHits.filter(h => !holeMeshNames.has(h.object.name)))
         : []
       const hits = holeHits.length > 0 ? holeHits : surfaceHits
+
+      // Markers for backend holes that matched no face — hit only when nothing
+      // on the model is in front of them (they sit just inside the bore).
+      if (holeEnabled && holeMarkers.length > 0) {
+        const markerHit = raycaster.intersectObjects(holeMarkers, false)[0]
+        const nearest   = allHits[0]
+        if (markerHit && (!nearest || markerHit.distance <= nearest.distance + modelRadius * 1e-3)) {
+          const bh = backendHoleById.get(markerHit.object.userData.backendHoleId)
+          if (bh) {
+            clearActiveAnnotation()
+            const selected = pickBackendHole(bh.id)
+            const p = markerHit.point
+            emit('trigger-event', {
+              name:  'hole-clicked',
+              event: backendHoleEventPayload(bh, { selected, point: { x: p.x, y: p.y, z: p.z } }),
+            })
+            emitMultiSelection()
+            return
+          }
+        }
+      }
 
       if (hits.length > 0) {
         const hit      = hits[0]
@@ -2828,7 +2887,22 @@ export default {
         }
 
         // ── Selection logic ───────────────────────────────────────────────────
-        if (props.content?.multiSelectMode) {
+        const holeId = faceData ? faceToHoleId.get(faceData) : undefined
+        const bh     = holeId !== undefined ? backendHoleById.get(holeId) : null
+        if (bh) {
+          // Face belongs to a backend hole → select the hole (by id) instead of the face
+          const selected = pickBackendHole(bh.id)
+          if (selected) {
+            emit('trigger-event', {
+              name:  'face-selected',
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich, holeId: bh.id, hole: bh.raw },
+            })
+          }
+          emit('trigger-event', {
+            name:  'hole-clicked',
+            event: backendHoleEventPayload(bh, { selected, point }),
+          })
+        } else if (props.content?.multiSelectMode) {
           // Toggle this face in/out of the multi-selection
           const existingIdx = selections.findIndex(
             s => s.mesh === mesh && s.groupIndex === groupIdx
@@ -2841,7 +2915,7 @@ export default {
             selections.push({ mesh, groupIndex: groupIdx, overlays, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry, faceData })
             emit('trigger-event', {
               name:  'face-selected',
-              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich },
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich, holeId: null, hole: null },
             })
           }
         } else {
@@ -2857,7 +2931,7 @@ export default {
             selections.push({ mesh, groupIndex: groupIdx, overlays, faceIndex: fi, point, normal, meshName, objectName, userData, ...faceGeometry, faceData })
             emit('trigger-event', {
               name:  'face-selected',
-              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich },
+              event: { faceIndex: fi, groupIndex: groupIdx, meshName, objectName, point, normal, userData, ...faceGeometry, ...faceEnrich, holeId: null, hole: null },
             })
           }
         }
@@ -2909,7 +2983,24 @@ export default {
     })
 
     // Focus the camera on a specific hole, looking along its axis from the open end
-    const focusOnHole = (hole) => {
+    const focusOnHole = (input) => {
+      let hole = input
+      // Backend hole (bound `holes` item): use its normalized mm geometry + matched faces
+      const bh = (input?.id !== undefined && input?.id !== null) ? backendHoleById.get(input.id) : null
+      if (bh) {
+        hole = {
+          center:   { x: bh.center.x, y: bh.center.y, z: bh.center.z },
+          axis:     { x: bh.axis.x,   y: bh.axis.y,   z: bh.axis.z },
+          diameter: bh.diameter,
+          depth:    bh.depth,
+          faceRefs: backendHoleFaceRefs(bh),
+        }
+      } else if (Array.isArray(input?.center)) {
+        // Backend-shaped object not in the bound list — convert units only
+        const n = normalizeBackendHole({ ...input, id: input?.id ?? '__focus' })
+        if (!n) return
+        hole = { center: { x: n.center.x, y: n.center.y, z: n.center.z }, axis: { x: n.axis.x, y: n.axis.y, z: n.axis.z }, diameter: n.diameter, depth: n.depth, faceRefs: [] }
+      }
       if (!camera || !controls || !hole?.center || !hole?.axis) return
 
       const center  = new THREE.Vector3(hole.center.x, hole.center.y, hole.center.z)
@@ -2942,12 +3033,312 @@ export default {
 
       // Highlight all constituent meshes (merged holes span multiple meshes)
       clearFocusedHoleOverlay()
+      const focusColor = props.content?.selectionColor || '#1a73e8'
+      if (Array.isArray(hole.faceRefs)) {
+        for (const ref of hole.faceRefs) {
+          const mesh = clickableMeshes.find(m => m.name === ref.meshName)
+          if (!mesh) continue
+          const g = mesh.geometry?.groups?.find(gr => (gr.materialIndex ?? 0) === ref.materialIndex)
+          focusedHoleOverlays.push(makeOverlayMesh(mesh, g ? Math.floor(g.start / 3) : 0, focusColor, -3))
+        }
+        return
+      }
       const names = Array.isArray(hole.meshNames) ? hole.meshNames : [hole.meshName].filter(Boolean)
       for (const name of names) {
         const mesh = clickableMeshes.find(m => m.name === name)
-        if (mesh) focusedHoleOverlays.push(makeOverlayMesh(mesh, 0, props.content?.selectionColor || '#1a73e8', -3))
+        if (mesh) focusedHoleOverlays.push(makeOverlayMesh(mesh, 0, focusColor, -3))
       }
     }
+
+    // ─── Backend holes (stable ids from the CAD backend) ─────────────────────
+    // `holes` items come from GET cad_holes/holes: { id, center:[x,y,z], axis:[x,y,z],
+    // diameter, depth, through, hole_type, thread_spec } in inches by default. The
+    // GLB shares the STEP frame in millimeters, so position = value × 25.4 on the
+    // same axes. Each viewer cylinder face is assigned to the closest compatible
+    // backend hole (same diameter, parallel axis, on its axis line, within its
+    // depth); holes with no face get a clickable marker instead.
+    const HOLE_TYPE_COLOR_KEYS = {
+      simple:      'holeColorSimple',
+      tapped:      'holeColorTapped',
+      reamed:      'holeColorReamed',
+      counterbore: 'holeColorCounterbore',
+      ignore:      'holeColorIgnore',
+    }
+    const HOLE_TYPE_COLOR_DEFAULTS = {
+      holeColorUnassigned:  '#9aa0a6',
+      holeColorSimple:      '#1a73e8',
+      holeColorTapped:      '#e8710a',
+      holeColorReamed:      '#9334e6',
+      holeColorCounterbore: '#188038',
+      holeColorIgnore:      '#5f6368',
+    }
+    const getHoleTypeColor = (holeType) => {
+      const key = HOLE_TYPE_COLOR_KEYS[holeType] || 'holeColorUnassigned'
+      return props.content?.[key] || HOLE_TYPE_COLOR_DEFAULTS[key]
+    }
+
+    const holeUnitScale = () => (props.content?.holeUnits === 'mm' ? 1 : 25.4)
+
+    const toVec3 = (v) => {
+      let x, y, z
+      if (Array.isArray(v)) { [x, y, z] = v }
+      else if (v && typeof v === 'object') { ({ x, y, z } = v) }
+      else return null
+      x = Number(x); y = Number(y); z = Number(z)
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null
+      return new THREE.Vector3(x, y, z)
+    }
+
+    // Normalize one bound item into model units (mm). Returns null when unusable.
+    const normalizeBackendHole = (raw) => {
+      if (!raw || typeof raw !== 'object' || raw.id === undefined || raw.id === null) return null
+      const scale  = holeUnitScale()
+      const center = toVec3(raw.center)
+      const axis   = toVec3(raw.axis)
+      const dia    = Number(raw.diameter)
+      if (!center || !axis || axis.lengthSq() < 1e-12 || !(dia > 0)) return null
+      const depth = Number(raw.depth)
+      return {
+        id:       raw.id,
+        raw,
+        center:   center.multiplyScalar(scale),
+        axis:     axis.normalize(),
+        diameter: dia * scale,
+        depth:    Number.isFinite(depth) && depth > 0 ? depth * scale : 0,
+        faces:    [],   // matched viewer face entries (from facesData)
+      }
+    }
+
+    // Mesh/material pairs to highlight for a backend hole
+    const backendHoleFaceRefs = (bh) => {
+      const refs = []
+      for (const f of bh?.faces || []) {
+        if (f?.merged && Array.isArray(f.meshNames)) f.meshNames.forEach(n => refs.push({ meshName: n, materialIndex: 0 }))
+        else if (f?.meshName) refs.push({ meshName: f.meshName, materialIndex: f.materialIndex ?? 0 })
+      }
+      return refs
+    }
+
+    const clearBackendHoleTypeOverlays = () => {
+      backendHoleTypeOverlays.forEach(o => removeOverlay(o))
+      backendHoleTypeOverlays = []
+    }
+
+    const clearHoleMarkers = () => {
+      holeMarkers.forEach(m => {
+        scene?.remove(m)
+        m.geometry?.dispose()
+        m.material?.dispose()
+      })
+      holeMarkers = []
+    }
+
+    const clearPickedHoleOverlays = () => {
+      for (const overlays of pickedHoleOverlays.values()) overlays.forEach(o => removeOverlay(o))
+      pickedHoleOverlays = new Map()
+    }
+
+    const clearBackendHoleVisuals = () => {
+      clearBackendHoleTypeOverlays()
+      clearHoleMarkers()
+      clearPickedHoleOverlays()
+    }
+
+    const buildHoleMarker = (bh, color) => {
+      const r   = bh.diameter / 2 * 0.97   // just inside the bore wall so it isn't z-fighting it
+      const len = Math.max(bh.depth, bh.diameter * 0.5, 0.5)
+      const geo = new THREE.CylinderGeometry(r, r, len, 32, 1, true)
+      const mat = new THREE.MeshBasicMaterial({
+        color:               new THREE.Color(color),
+        transparent:         true,
+        opacity:             0.65,
+        side:                THREE.DoubleSide,
+        depthWrite:          false,
+        polygonOffset:       true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits:  -2,
+      })
+      const marker = new THREE.Mesh(geo, mat)
+      marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), bh.axis)
+      marker.position.copy(bh.center)
+      marker.renderOrder = 3
+      marker.userData.backendHoleId = bh.id
+      marker.userData.baseColor     = color
+      scene.add(marker)
+      return marker
+    }
+
+    const buildBackendHoleTypeOverlays = () => {
+      clearBackendHoleTypeOverlays()
+      clearHoleMarkers()
+      if (!loadedModel) return
+      const showColors = props.content?.showHoleTypeColors !== false
+      for (const bh of backendHoles) {
+        const color = getHoleTypeColor(bh.raw?.hole_type)
+        if (bh.faces.length === 0) {
+          // Unmatched: always draw the marker — it is the only click target for this hole
+          holeMarkers.push(buildHoleMarker(bh, color))
+          continue
+        }
+        if (!showColors) continue
+        for (const ref of backendHoleFaceRefs(bh)) {
+          const o = makeFeatureOverlay(ref.meshName, ref.materialIndex, color)
+          if (!o) continue
+          o.renderOrder = 1   // below selection overlays
+          backendHoleTypeOverlays.push(o)
+        }
+      }
+      refreshPickedHoleHighlights()
+    }
+
+    const matchBackendHoles = () => {
+      faceToHoleId = new Map()
+      backendHoleById = new Map()
+      const list = Array.isArray(props.content?.holes) ? props.content.holes : []
+      backendHoles = list.map(normalizeBackendHole).filter(Boolean)
+      backendHoles.forEach(bh => backendHoleById.set(bh.id, bh))
+      if (!backendHoles.length || !facesData.length) return
+
+      const _d = new THREE.Vector3()
+      const candidates = facesData.filter(f =>
+        f?.surfaceType === 'Cylinder' && f.isConcave !== false &&
+        f.diameter > 0 && f.axis && f.center
+      )
+      for (const face of candidates) {
+        const fAxis   = toVec3(face.axis)
+        const fCenter = toVec3(face.center)
+        if (!fAxis || !fCenter || fAxis.lengthSq() < 1e-12) continue
+        fAxis.normalize()
+        // Full cylinders report an on-axis centroid and a true diameter; lone partial
+        // arcs report a centroid ~0.64·R off-axis and a diameter biased low (~0.82×).
+        const full     = (face.arcDeg ?? 0) >= 300
+        const diamTol  = full ? 0.1 : 0.25
+        let best = null, bestScore = Infinity
+        for (const bh of backendHoles) {
+          if (Math.abs(fAxis.dot(bh.axis)) < 0.95) continue
+          const dDiam = Math.abs(face.diameter - bh.diameter) / bh.diameter
+          if (dDiam > diamTol) continue
+          _d.subVectors(fCenter, bh.center)
+          const axial  = _d.dot(bh.axis)
+          const radial = _d.clone().addScaledVector(bh.axis, -axial).length()
+          const radialTol = Math.max(0.5, bh.diameter * (full ? 0.25 : 0.75))
+          if (radial > radialTol) continue
+          const axialTol = bh.depth / 2 + Math.max(0.5, bh.diameter * 0.1)
+          if (Math.abs(axial) > axialTol) continue
+          const score = radial / bh.diameter + dDiam + Math.abs(axial) / (axialTol || 1) * 0.1
+          if (score < bestScore) { bestScore = score; best = bh }
+        }
+        if (best) {
+          best.faces.push(face)
+          faceToHoleId.set(face, best.id)
+        }
+      }
+    }
+
+    const buildBackendHoles = () => {
+      if (!loadedModel) return
+      matchBackendHoles()
+      // Drop picked ids that no longer exist in the bound list
+      for (const id of [...pickedHoleIds]) if (!backendHoleById.has(id)) pickedHoleIds.delete(id)
+      buildBackendHoleTypeOverlays()
+      const unmatchedIds = backendHoles.filter(bh => bh.faces.length === 0).map(bh => bh.id)
+      const summary = {
+        total:        backendHoles.length,
+        matched:      backendHoles.length - unmatchedIds.length,
+        unmatched:    unmatchedIds.length,
+        unmatchedIds,
+      }
+      setBackendHoleMatchesVar(summary)
+      setSelectedHoleIdsVar([...pickedHoleIds])
+      if (backendHoles.length) emit('trigger-event', { name: 'holes-matched', event: summary })
+    }
+
+    // ── Hole-level selection (ids) ─────────────────────────────────────────────
+    const refreshPickedHoleHighlights = () => {
+      clearPickedHoleOverlays()
+      const selColor = props.content?.selectionColor || '#1a73e8'
+      for (const m of holeMarkers) {
+        const picked = pickedHoleIds.has(m.userData.backendHoleId)
+        m.material.color.set(picked ? selColor : m.userData.baseColor)
+        m.material.opacity = picked ? 0.85 : 0.65
+      }
+      for (const id of pickedHoleIds) {
+        const bh = backendHoleById.get(id)
+        if (!bh || !bh.faces.length) continue
+        const overlays = []
+        for (const ref of backendHoleFaceRefs(bh)) {
+          const mesh = clickableMeshes.find(cm => cm.name === ref.meshName)
+          if (!mesh) continue
+          let fi = 0
+          const g = mesh.geometry?.groups?.find(gr => (gr.materialIndex ?? 0) === ref.materialIndex)
+          if (g) fi = Math.floor(g.start / 3)
+          const o = makeOverlayMesh(mesh, fi, selColor, -2, false)
+          o.renderOrder = 4
+          overlays.push(o)
+        }
+        pickedHoleOverlays.set(id, overlays)
+      }
+    }
+
+    const backendHoleEventPayload = (bh, extra = {}) => ({
+      id:          bh.id,
+      hole:        bh.raw,
+      diameter:    bh.raw?.diameter    ?? null,
+      depth:       bh.raw?.depth       ?? null,
+      through:     bh.raw?.through     ?? null,
+      hole_type:   bh.raw?.hole_type   ?? null,
+      thread_spec: bh.raw?.thread_spec ?? null,
+      matched:     bh.faces.length > 0,
+      ...extra,
+    })
+
+    const emitHolesSelected = () => {
+      const ids = [...pickedHoleIds]
+      setSelectedHoleIdsVar(ids)
+      emit('trigger-event', {
+        name:  'holes-selected',
+        event: { ids, holes: ids.map(id => backendHoleById.get(id)?.raw).filter(Boolean), count: ids.length },
+      })
+    }
+
+    // Toggle (multi-select) or replace (single) the hole selection. Returns whether
+    // the hole is selected afterwards.
+    const pickBackendHole = (id) => {
+      let selected = true
+      if (props.content?.multiSelectMode) {
+        if (pickedHoleIds.has(id)) { pickedHoleIds.delete(id); selected = false }
+        else pickedHoleIds.add(id)
+      } else {
+        clearAllSelections()
+        pickedHoleIds.add(id)
+      }
+      refreshPickedHoleHighlights()
+      updateSelectionLabel()
+      return selected
+    }
+
+    const focusHoleById = (id) => {
+      if (id === undefined || id === null) return
+      const bh = backendHoleById.get(id) ?? backendHoleById.get(Number(id)) ?? backendHoleById.get(String(id))
+      if (bh) focusOnHole(bh.raw)
+    }
+
+    const selectHolesByIds = (ids) => {
+      clearAllSelections()
+      for (const id of Array.isArray(ids) ? ids : []) {
+        const key = [id, Number(id), String(id)].find(k => backendHoleById.has(k))
+        if (key !== undefined) pickedHoleIds.add(key)
+      }
+      refreshPickedHoleHighlights()
+      updateSelectionLabel()
+      emitMultiSelection()
+    }
+
+    const resetPickedHoles = () => {
+      pickedHoleIds.clear()
+      refreshPickedHoleHighlights()
+    }
+
 
     // ─── Counterbore detection ────────────────────────────────────────────────
     // A counterbore is a larger-diameter concave cylinder that is coaxial with
@@ -3329,6 +3720,7 @@ export default {
     watch(() => props.content?.selectionColor, (color) => {
       selections.forEach(s => s.overlays?.forEach(o => o.material?.color?.set(color || '#1a73e8')))
       focusedHoleOverlays.forEach(o => o.material?.color?.set(color || '#1a73e8'))
+      refreshPickedHoleHighlights()
     })
 
     watch(() => props.content?.clearSelectionsTrigger, () => {
@@ -3398,6 +3790,23 @@ export default {
       if (libsReady.value && loadedModel) buildAnnotationOverlays()
     }, { deep: true })
 
+    // Backend holes: re-match when the bound list or its units change (e.g. refetch after PATCH)
+    watch(() => [props.content?.holes, props.content?.holeUnits], () => {
+      if (libsReady.value && loadedModel) buildBackendHoles()
+    }, { deep: true })
+
+    watch(() => [
+      props.content?.showHoleTypeColors,
+      props.content?.holeColorUnassigned,
+      props.content?.holeColorSimple,
+      props.content?.holeColorTapped,
+      props.content?.holeColorReamed,
+      props.content?.holeColorCounterbore,
+      props.content?.holeColorIgnore,
+    ], () => {
+      if (libsReady.value && loadedModel) buildBackendHoleTypeOverlays()
+    })
+
     // Phase 2: Rebuild feature overlays when colors / active filter change
     watch(() => [props.content?.featureColors, props.content?.activeFeatureTypes], () => {
       if (libsReady.value && loadedModel) buildFeatureOverlays()
@@ -3465,6 +3874,7 @@ export default {
       clearAllTolerances()
       clearCornerOverlays()
       clearFeatureOverlays()
+      clearBackendHoleVisuals()
       facesData           = []
       cornersData         = []
       holeMeshNames       = new Set()
@@ -3479,7 +3889,7 @@ export default {
     })
 
     // Expose callable actions to WeWeb workflow engine
-    expose({ clearAllSelections, resetView: resetCamera, toggleBoundingBox })
+    expose({ clearAllSelections, resetView: resetCamera, toggleBoundingBox, focusHoleById, selectHolesByIds })
 
     return {
       // DOM
