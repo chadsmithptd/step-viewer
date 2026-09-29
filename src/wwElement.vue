@@ -3280,8 +3280,24 @@ export default {
       }
     }
 
+    // Same-size key: diameter in inches rounded to 0.001 — the same grouping as the
+    // backend's GET cad_holes/holes `groups`.
+    const holeSizeKey = (bh) => {
+      const d = Number(bh?.raw?.diameter)
+      if (!Number.isFinite(d)) return null
+      const inches = props.content?.holeUnits === 'mm' ? d / 25.4 : d
+      return Math.round(inches * 1000)
+    }
+
+    const sameSizeHoleIds = (bh) => {
+      const key = holeSizeKey(bh)
+      if (key === null) return [bh.id]
+      return backendHoles.filter(h => holeSizeKey(h) === key).map(h => h.id)
+    }
+
     const backendHoleEventPayload = (bh, extra = {}) => ({
       id:          bh.id,
+      groupIds:    sameSizeHoleIds(bh),
       hole:        bh.raw,
       diameter:    bh.raw?.diameter    ?? null,
       depth:       bh.raw?.depth       ?? null,
@@ -3303,14 +3319,18 @@ export default {
 
     // Toggle (multi-select) or replace (single) the hole selection. Returns whether
     // the hole is selected afterwards.
+    // With "Select Same-Size Holes Together" on, every hole of the clicked hole's
+    // diameter is added or removed with it.
     const pickBackendHole = (id) => {
       let selected = true
+      const bh  = backendHoleById.get(id)
+      const ids = (props.content?.selectSameSizeHoles === true && bh) ? sameSizeHoleIds(bh) : [id]
       if (props.content?.multiSelectMode) {
-        if (pickedHoleIds.has(id)) { pickedHoleIds.delete(id); selected = false }
-        else pickedHoleIds.add(id)
+        if (pickedHoleIds.has(id)) { ids.forEach(i => pickedHoleIds.delete(i)); selected = false }
+        else ids.forEach(i => pickedHoleIds.add(i))
       } else {
         clearAllSelections()
-        pickedHoleIds.add(id)
+        ids.forEach(i => pickedHoleIds.add(i))
       }
       refreshPickedHoleHighlights()
       updateSelectionLabel()

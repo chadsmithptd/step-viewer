@@ -117,6 +117,21 @@ export default {
       /* wwEditor:end */
     },
 
+    selectSameSizeHoles: {
+      label: { en: 'Select Same-Size Holes Together' },
+      type: 'OnOff',
+      section: 'settings',
+      bindable: true,
+      defaultValue: false,
+      /* wwEditor:start */
+      bindingValidation: {
+        type: 'boolean',
+        tooltip: 'When true, clicking a backend hole selects (or, in multi-select, toggles) every hole with the same diameter (to 0.001 in) — the same grouping as the backend groups.',
+      },
+      propertyHelp: 'Tag a whole hole size at once: click one hole, then send selectedHoleIds to PATCH cad_holes/holes/bulk_update.',
+      /* wwEditor:end */
+    },
+
     showHoleTypeColors: {
       label: { en: 'Color Backend Holes by Type' },
       type: 'OnOff',
@@ -1149,6 +1164,7 @@ export default {
       label: { en: 'On Hole Clicked' },
       event: {
         id:          null,   // backend hole id — use for PATCH cad_holes/holes/{id}
+        groupIds:    [],     // ids of every backend hole with the same diameter (0.001 in)
         hole:        {},     // the Backend Holes item as bound
         diameter:    null,   // backend units
         depth:       null,
