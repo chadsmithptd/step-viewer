@@ -18,6 +18,8 @@
     <!-- Error overlay -->
     <div v-if="errorMsg" class="viewer-overlay error-overlay">
       <span class="overlay-text">⚠ {{ errorMsg }}</span>
+      <span v-if="errorDetail" class="overlay-detail">{{ errorDetail }}</span>
+      <button v-if="canRetryBoot" type="button" class="overlay-retry" @click="retryBoot">Retry</button>
     </div>
 
     <!-- Controls panel (center-right) -->
@@ -142,10 +144,11 @@
 <script>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 
-// ─── CDN URLs (loaded at runtime, bypassing webpack) ─────────────────────────
-const CDN = 'https://esm.sh/three@0.162.0'
-
-// Module-level cache so libs are fetched once per page load
+// ─── Viewer libraries (runtime ESM, bypassing webpack) ───────────────────────
+// esm.sh sometimes answers the first request for an examples module with
+// HTTP 500 "Storage error". A failed dynamic import stays failed for the
+// rest of the page, so the next source must be a different URL.
+// Module-level cache so libs are fetched once per page load.
 let THREE                = null
 let TrackballControls    = null
 let GLTFLoader           = null
@@ -153,8 +156,22 @@ let LineSegments2        = null
 let LineSegmentsGeometry = null
 let LineMaterial         = null
 
-const loadLibs = async () => {
-  if (THREE) return
+const assignLibs = (t, tc, g, ls2, lsg, lm) => {
+  if (typeof t?.WebGLRenderer !== 'function') throw new Error('Three.js did not export WebGLRenderer')
+  if (typeof tc?.TrackballControls !== 'function') throw new Error('TrackballControls did not load')
+  if (typeof g?.GLTFLoader !== 'function') throw new Error('GLTFLoader did not load')
+  if (typeof ls2?.LineSegments2 !== 'function') throw new Error('LineSegments2 did not load')
+  if (typeof lsg?.LineSegmentsGeometry !== 'function') throw new Error('LineSegmentsGeometry did not load')
+  if (typeof lm?.LineMaterial !== 'function') throw new Error('LineMaterial did not load')
+  THREE                = t
+  TrackballControls    = tc.TrackballControls
+  GLTFLoader           = g.GLTFLoader
+  LineSegments2        = ls2.LineSegments2
+  LineSegmentsGeometry = lsg.LineSegmentsGeometry
+  LineMaterial         = lm.LineMaterial
+}
+
+const loadFromEsmSh = async () => {
   const [t, tc, g, ls2, lsg, lm] = await Promise.all([
     import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0'),
     import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/controls/TrackballControls'),
@@ -163,12 +180,34 @@ const loadLibs = async () => {
     import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/lines/LineSegmentsGeometry'),
     import(/* webpackIgnore: true */ 'https://esm.sh/three@0.162.0/examples/jsm/lines/LineMaterial'),
   ])
-  THREE                = t
-  TrackballControls    = tc.TrackballControls
-  GLTFLoader           = g.GLTFLoader
-  LineSegments2        = ls2.LineSegments2
-  LineSegmentsGeometry = lsg.LineSegmentsGeometry
-  LineMaterial         = lm.LineMaterial
+  assignLibs(t, tc, g, ls2, lsg, lm)
+}
+
+const loadFromJsDelivr = async () => {
+  const [t, tc, g, ls2, lsg, lm] = await Promise.all([
+    import(/* webpackIgnore: true */ 'https://cdn.jsdelivr.net/npm/three@0.162.0/+esm'),
+    import(/* webpackIgnore: true */ 'https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/controls/TrackballControls.js/+esm'),
+    import(/* webpackIgnore: true */ 'https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/loaders/GLTFLoader.js/+esm'),
+    import(/* webpackIgnore: true */ 'https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/lines/LineSegments2.js/+esm'),
+    import(/* webpackIgnore: true */ 'https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/lines/LineSegmentsGeometry.js/+esm'),
+    import(/* webpackIgnore: true */ 'https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/lines/LineMaterial.js/+esm'),
+  ])
+  assignLibs(t, tc, g, ls2, lsg, lm)
+}
+
+const loadLibs = async () => {
+  if (THREE?.WebGLRenderer) return
+  try {
+    await loadFromEsmSh()
+  } catch (esmErr) {
+    console.warn('STEP Viewer: esm.sh failed, trying jsDelivr', esmErr)
+    try {
+      await loadFromJsDelivr()
+    } catch (fallbackErr) {
+      console.error('STEP Viewer: jsDelivr failed', fallbackErr)
+      throw esmErr
+    }
+  }
 }
 
 // ─── Document / window helpers (WeWeb-safe) ───────────────────────────────────
@@ -196,6 +235,8 @@ export default {
     const isLoading      = ref(false)
     const loadingMsg     = ref('Initializing…')
     const errorMsg       = ref('')
+    const errorDetail    = ref('')
+    const canRetryBoot   = ref(false)
     const selectionLabel = ref('')
     const libsReady      = ref(false)
     const modelLoaded    = ref(false)
@@ -3841,23 +3882,53 @@ export default {
     }, { deep: true })
 
     // ─── Lifecycle ────────────────────────────────────────────────────────────
-    onMounted(async () => {
-      isLoading.value  = true
-      loadingMsg.value = 'Initializing viewer…'
+    let booting = false
+    const startViewer = async () => {
+      if (booting) return
+      booting = true
+      isLoading.value    = true
+      loadingMsg.value   = 'Initializing viewer…'
+      errorMsg.value     = ''
+      errorDetail.value  = ''
+      canRetryBoot.value = false
+      try {
+        await loadLibs()
+        if (!renderer) initThree()
+        libsReady.value = true
+        if (props.content?.glbData && !modelLoaded.value) await loadModel(props.content.glbData)
+      } catch (err) {
+        const message = String(err?.message || err || 'Unknown error')
+        console.error('STEP Viewer: startup error', err)
+        if (/webgl/i.test(message)) {
+          errorMsg.value = 'Could not start the 3D view. WebGL is unavailable in this browser.'
+        } else if (!THREE?.WebGLRenderer) {
+          errorMsg.value = 'Failed to load viewer libraries. Check network connection.'
+        } else {
+          errorMsg.value = 'Could not start the viewer.'
+        }
+        errorDetail.value  = message.length > 220 ? `${message.slice(0, 220)}…` : message
+        canRetryBoot.value = true
+      } finally {
+        isLoading.value = false
+        booting = false
+      }
+    }
+
+    const retryBoot = () => {
+      // A failed dynamic import is cached for the life of the page. Reloading
+      // is the only way to ask the browser for those modules again.
+      if (!THREE?.WebGLRenderer) {
+        getWin().location?.reload?.()
+        return
+      }
+      startViewer()
+    }
+
+    onMounted(() => {
       const win = getWin()
       win.addEventListener('keydown', onKeyDown)
       win.addEventListener('keyup',   onKeyUp)
-      try {
-        await loadLibs()
-        libsReady.value = true
-        initThree()
-        if (props.content?.glbData) await loadModel(props.content.glbData)
-      } catch (err) {
-        errorMsg.value = 'Failed to load viewer libraries. Check network connection.'
-        console.error('STEP Viewer: lib load error', err)
-      } finally {
-        isLoading.value = false
-      }
+      startViewer()
     })
 
     onBeforeUnmount(() => {
@@ -3897,7 +3968,7 @@ export default {
       toleranceLabelContainerRef, bboxLabelContainerRef,
       content: props.content,
       // UI
-      isLoading, loadingMsg, errorMsg, selectionLabel, libsReady,
+      isLoading, loadingMsg, errorMsg, errorDetail, canRetryBoot, retryBoot, selectionLabel, libsReady,
       modelLoaded,
       // Phase 3: badge layer
       showAnnotationBadges, processedAnnotations, showBadgeLabel, showToleranceButton,
@@ -3948,6 +4019,7 @@ export default {
   .viewer-overlay {
     position: absolute;
     inset: 0;
+    z-index: 20;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -3959,6 +4031,28 @@ export default {
       font-weight: 500;
       color: #555;
     }
+
+    .overlay-detail {
+      max-width: 420px;
+      padding: 0 16px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: #8a5a55;
+      text-align: center;
+    }
+  }
+
+  .overlay-retry {
+    border: 1px solid #c0392b;
+    background: #fff;
+    color: #c0392b;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+
+    &:hover { background: #fff5f5; }
   }
 
   .loading-overlay {
