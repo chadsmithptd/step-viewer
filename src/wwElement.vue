@@ -530,10 +530,18 @@ export default {
       return input
     }
 
+    const asArrayBuffer = (input) => {
+      if (input instanceof ArrayBuffer) return input
+      if (ArrayBuffer.isView(input)) {
+        return input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength)
+      }
+      return null
+    }
+
     const resolveModelSource = (input, depth = 0) => {
       if (depth > 5) throw new Error('Model data is nested too deeply')
-      if (input instanceof ArrayBuffer) return classifyModelBuffer(input, depth)
-      if (ArrayBuffer.isView(input)) return classifyModelBuffer(input.buffer, depth)
+      const rawBuffer = asArrayBuffer(input)
+      if (rawBuffer) return classifyModelBuffer(rawBuffer, depth)
 
       let value = unwrapModelValue(input)
       if (typeof value !== 'string') throw new Error('Model data must be a URL, data URL, or base64 string')
@@ -574,13 +582,72 @@ export default {
       throw new Error('Model data is not a URL, data URL, GLB, or glTF JSON')
     }
 
+    // A file can start with the glTF magic and still carry a data URL where the
+    // JSON chunk should be. Only accept a GLB whose JSON chunk is actually JSON.
+    const glbJsonChunk = (buf) => {
+      if (!isGlbBuffer(buf) || buf.byteLength < 20) return null
+      try {
+        const view = new DataView(buf)
+        const version = view.getUint32(4, true)
+        const length = view.getUint32(8, true)
+        if (version < 2 || length < 20 || length > buf.byteLength) return null
+        let offset = 12
+        const end = Math.min(length, buf.byteLength)
+        while (offset + 8 <= end) {
+          const chunkLength = view.getUint32(offset, true)
+          const chunkType = view.getUint32(offset + 4, true)
+          offset += 8
+          if (chunkLength < 0 || offset + chunkLength > buf.byteLength) return null
+          if (chunkType === 0x4E4F534A) {
+            return new TextDecoder('utf-8', { fatal: false })
+              .decode(new Uint8Array(buf, offset, chunkLength))
+              .replace(/^\uFEFF/, '')
+              .replace(/\0/g, '')
+              .trim()
+          }
+          offset += chunkLength
+        }
+      } catch {
+        return null
+      }
+      return null
+    }
+
     const classifyModelBuffer = (buf, depth) => {
-      if (isGlbBuffer(buf)) return { type: 'glb', buffer: buf }
-      const head = textHead(buf)
-      if (head.startsWith('data:') || head.startsWith('{') || head.startsWith('[') || head.startsWith('"') || head.startsWith('Z2xURg')) {
+      const jsonChunk = glbJsonChunk(buf)
+      if (jsonChunk?.startsWith('{')) return { type: 'glb', buffer: buf }
+      // glTF magic with a data URL (or a quoted data URL) where the JSON chunk
+      // should be. GLTFLoader would JSON.parse that text and throw
+      // Unexpected token 'd', "data:appli"...
+      if (typeof jsonChunk === 'string' && jsonChunk && !jsonChunk.startsWith('{')) {
+        if (
+          jsonChunk.startsWith('data:') ||
+          jsonChunk.startsWith('"') ||
+          jsonChunk.startsWith("'") ||
+          jsonChunk.startsWith('Z2xURg')
+        ) {
+          return resolveModelSource(jsonChunk, depth + 1)
+        }
+      }
+      const head = textHead(buf, 256)
+      if (head.startsWith('data:') || head.startsWith('{') || head.startsWith('[') || head.startsWith('"') || head.startsWith("'") || head.startsWith('Z2xURg')) {
         return resolveModelSource(new TextDecoder('utf-8', { fatal: false }).decode(buf), depth + 1)
       }
+      // Magic matches but the chunk walker could not read a wrapper. Hand the
+      // bytes to GLTFLoader instead of rejecting a valid file.
+      if (isGlbBuffer(buf)) return { type: 'glb', buffer: buf }
       throw new Error('Model data is not a GLB or glTF file')
+    }
+
+    const loadSourceFromUrl = async (url) => {
+      let res
+      try {
+        res = await getWin().fetch(url)
+      } catch (err) {
+        throw new Error(`Model request failed (${err?.message || 'network'})`)
+      }
+      if (!res?.ok) throw new Error(`Model request failed (${res?.status ?? 'network'})`)
+      return resolveModelSource(await res.arrayBuffer())
     }
 
     // FileLoader uses XHR, which cannot read data: URLs. glTF buffer and image
@@ -2685,7 +2752,22 @@ export default {
     // ─── Model loading ────────────────────────────────────────────────────────
     const loadModel = async (glbData) => {
       if (!glbData || !scene) return
-      console.log('STEP Viewer: loadModel called, type=', typeof glbData, 'starts=', typeof glbData === 'string' ? glbData.slice(0, 20) : glbData)
+      const inputKind = (() => {
+        if (typeof glbData === 'string') {
+          const s = glbData.replace(/^\uFEFF/, '').trimStart()
+          const kind = s.startsWith('data:') ? 'data-url'
+            : (s.startsWith('http') || s.startsWith('blob:') || s.startsWith('/')) ? 'url'
+            : (s.startsWith('{') || s.startsWith('[')) ? 'json'
+            : 'string'
+          return `${kind} ${s.length}`
+        }
+        if (glbData instanceof ArrayBuffer) return `buffer ${glbData.byteLength}`
+        if (ArrayBuffer.isView(glbData)) return `view ${glbData.byteLength}`
+        if (Array.isArray(glbData)) return `array ${glbData.length}`
+        if (glbData && typeof glbData === 'object') return `object ${Object.keys(glbData).slice(0, 6).join(',')}`
+        return typeof glbData
+      })()
+      console.log('STEP Viewer: loadModel called,', inputKind, typeof glbData === 'string' ? glbData.slice(0, 80) : '')
 
       isLoading.value  = true
       loadingMsg.value = 'Loading model…'
@@ -2717,7 +2799,37 @@ export default {
 
       const blobUrls = []
       try {
-        const source = resolveModelSource(glbData)
+        let source = resolveModelSource(glbData)
+        for (let hop = 0; hop < 6; hop++) {
+          if (source.type === 'url') {
+            source = await loadSourceFromUrl(source.url)
+            continue
+          }
+          // Never hand GLTFLoader a document whose text is still "data:application/...".
+          // That is the exact JSON.parse failure shown in the editor.
+          if (source.type === 'json') {
+            const trimmed = String(source.text ?? '').replace(/^\uFEFF/, '').trimStart()
+            if (trimmed.startsWith('data:') || trimmed.startsWith('"') || trimmed.startsWith("'")) {
+              source = resolveModelSource(trimmed)
+              continue
+            }
+          }
+          if (source.type === 'glb') {
+            const chunk = glbJsonChunk(source.buffer)
+            if (typeof chunk === 'string' && chunk.startsWith('data:')) {
+              source = resolveModelSource(chunk)
+              continue
+            }
+          }
+          break
+        }
+        if (source.type === 'url') throw new Error('Model URL did not return a GLB or glTF file')
+        if (source.type === 'json' && String(source.text ?? '').replace(/^\uFEFF/, '').trimStart().startsWith('data:')) {
+          throw new Error('Model data is still a data URL after decoding')
+        }
+        if (source.type !== 'json' && source.type !== 'glb') {
+          throw new Error('Model data is not a GLB or glTF file')
+        }
         const manager = new THREE.LoadingManager()
         manager.setURLModifier((url) => (
           typeof url === 'string' && url.startsWith('data:') ? dataUrlToBlobUrl(url, blobUrls) : url
@@ -2725,9 +2837,7 @@ export default {
         const loader = new GLTFLoader(manager)
         let gltf
 
-        if (source.type === 'url') {
-          gltf = await new Promise((res, rej) => loader.load(source.url, res, undefined, rej))
-        } else if (source.type === 'json') {
+        if (source.type === 'json') {
           console.log('STEP Viewer: loading as glTF JSON, length=', source.text.length)
           gltf = await new Promise((res, rej) => loader.parse(source.text, '', res, rej))
         } else {
@@ -2907,7 +3017,7 @@ export default {
           },
         })
       } catch (err) {
-        errorMsg.value = `Failed to load model: ${err?.message || 'Unknown error'}`
+        errorMsg.value = `Failed to load model (v0.0.4, ${inputKind}): ${err?.message || 'Unknown error'}`
         console.error('STEP Viewer: model load error', err)
       } finally {
         isLoading.value = false
