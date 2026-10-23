@@ -482,16 +482,127 @@ export default {
     // ─── Helpers ──────────────────────────────────────────────────────────────
     const easeInOut = (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t)
 
-    const isDataUrl = (s) => typeof s === 'string' && s.startsWith('data:')
     const isHttpUrl = (s) => typeof s === 'string' &&
       (s.startsWith('http') || s.startsWith('/') || s.startsWith('blob:'))
 
     const decodeBase64ToBuffer = (b64) => {
-      const raw  = atob(b64)
-      const buf  = new ArrayBuffer(raw.length)
+      const clean = String(b64 ?? '').replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/')
+      const pad = clean.length % 4 === 0 ? '' : '='.repeat((4 - (clean.length % 4)) % 4)
+      let raw
+      try {
+        raw = atob(clean + pad)
+      } catch (err) {
+        throw new Error('Model data is not valid base64')
+      }
+      const buf = new ArrayBuffer(raw.length)
       const view = new Uint8Array(buf)
       for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i)
       return buf
+    }
+
+    const textHead = (buf, count = 120) => {
+      const len = Math.min(count, buf?.byteLength || 0)
+      if (!len) return ''
+      return new TextDecoder('utf-8', { fatal: false })
+        .decode(new Uint8Array(buf, 0, len))
+        .replace(/^\uFEFF/, '')
+        .trimStart()
+    }
+
+    const isGlbBuffer = (buf) => {
+      if (!buf || buf.byteLength < 4) return false
+      const b = new Uint8Array(buf, 0, 4)
+      return b[0] === 0x67 && b[1] === 0x6c && b[2] === 0x54 && b[3] === 0x46
+    }
+
+    // WeWeb file bindings and OCCT responses often nest the GLB inside one or
+    // more data URLs. GLTFLoader JSON-parses whatever it is given, so a payload
+    // whose text is still "data:application/..." fails before the mesh loads.
+    const unwrapModelValue = (input) => {
+      if (Array.isArray(input)) return input.length ? unwrapModelValue(input[0]) : ''
+      if (input && typeof input === 'object') {
+        for (const key of ['base64', 'data', 'url', 'src', 'content', 'glb', 'glbData', 'file', 'model']) {
+          const nested = input[key]
+          if (typeof nested === 'string' && nested.trim()) return nested
+          if (nested && typeof nested === 'object') return unwrapModelValue(nested)
+        }
+      }
+      return input
+    }
+
+    const resolveModelSource = (input, depth = 0) => {
+      if (depth > 5) throw new Error('Model data is nested too deeply')
+      if (input instanceof ArrayBuffer) return classifyModelBuffer(input, depth)
+      if (ArrayBuffer.isView(input)) return classifyModelBuffer(input.buffer, depth)
+
+      let value = unwrapModelValue(input)
+      if (typeof value !== 'string') throw new Error('Model data must be a URL, data URL, or base64 string')
+      value = value.replace(/^\uFEFF/, '').trim()
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        try { value = JSON.parse(value) } catch { value = value.slice(1, -1) }
+      }
+      if (typeof value !== 'string' || !value) throw new Error('Model data is empty')
+
+      if (value.startsWith('data:')) {
+        const comma = value.indexOf(',')
+        if (comma < 0) throw new Error('Data URL is missing a payload')
+        const header = value.slice(0, comma)
+        const body = value.slice(comma + 1)
+        if (/;base64/i.test(header)) return classifyModelBuffer(decodeBase64ToBuffer(body), depth)
+        let text = body
+        try { text = decodeURIComponent(body) } catch { text = body }
+        return resolveModelSource(text, depth + 1)
+      }
+
+      if (isHttpUrl(value)) return { type: 'url', url: value }
+
+      if (value.startsWith('{') || value.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value)
+          if (parsed?.asset?.version) return { type: 'json', text: value }
+          const nested = unwrapModelValue(parsed)
+          if (typeof nested === 'string' && nested !== value) return resolveModelSource(nested, depth + 1)
+        } catch { /* not a wrapper; let GLTFLoader report the JSON error */ }
+        return { type: 'json', text: value }
+      }
+
+      const compact = value.replace(/\s/g, '')
+      if (compact.length >= 32 && /^[A-Za-z0-9+/_-]+=*$/.test(compact)) {
+        return classifyModelBuffer(decodeBase64ToBuffer(compact), depth)
+      }
+
+      throw new Error('Model data is not a URL, data URL, GLB, or glTF JSON')
+    }
+
+    const classifyModelBuffer = (buf, depth) => {
+      if (isGlbBuffer(buf)) return { type: 'glb', buffer: buf }
+      const head = textHead(buf)
+      if (head.startsWith('data:') || head.startsWith('{') || head.startsWith('[') || head.startsWith('"') || head.startsWith('Z2xURg')) {
+        return resolveModelSource(new TextDecoder('utf-8', { fatal: false }).decode(buf), depth + 1)
+      }
+      throw new Error('Model data is not a GLB or glTF file')
+    }
+
+    // FileLoader uses XHR, which cannot read data: URLs. glTF buffer and image
+    // URIs are rewritten to blob URLs before Three.js fetches them.
+    const dataUrlToBlobUrl = (url, keep) => {
+      const comma = url.indexOf(',')
+      if (comma < 0) return url
+      const header = url.slice(0, comma)
+      const body = url.slice(comma + 1)
+      const mime = header.slice(5).split(';')[0] || 'application/octet-stream'
+      let bytes
+      if (/;base64/i.test(header)) {
+        bytes = new Uint8Array(decodeBase64ToBuffer(body))
+      } else {
+        let text = body
+        try { text = decodeURIComponent(body) } catch { text = body }
+        bytes = new TextEncoder().encode(text)
+      }
+      const blob = new Blob([bytes], { type: mime || 'application/octet-stream' })
+      const blobUrl = getWin().URL.createObjectURL(blob)
+      keep.push(blobUrl)
+      return blobUrl
     }
 
     const disposeObject = (obj) => {
@@ -2604,21 +2715,23 @@ export default {
       holeMeshArray      = []
       currentFeatureModel = null
 
+      const blobUrls = []
       try {
-        const loader = new GLTFLoader()
+        const source = resolveModelSource(glbData)
+        const manager = new THREE.LoadingManager()
+        manager.setURLModifier((url) => (
+          typeof url === 'string' && url.startsWith('data:') ? dataUrlToBlobUrl(url, blobUrls) : url
+        ))
+        const loader = new GLTFLoader(manager)
         let gltf
 
-        if (isDataUrl(glbData)) {
-          const buf = decodeBase64ToBuffer(glbData.split(',')[1])
-          gltf = await new Promise((res, rej) => loader.parse(buf, '', res, rej))
-        } else if (isHttpUrl(glbData)) {
-          gltf = await new Promise((res, rej) => loader.load(glbData, res, undefined, rej))
-        } else if (typeof glbData === 'string' && glbData.trimStart().startsWith('{')) {
-          console.log('STEP Viewer: loading as glTF JSON, length=', glbData.length)
-          gltf = await new Promise((res, rej) => loader.parse(glbData, '', res, rej))
+        if (source.type === 'url') {
+          gltf = await new Promise((res, rej) => loader.load(source.url, res, undefined, rej))
+        } else if (source.type === 'json') {
+          console.log('STEP Viewer: loading as glTF JSON, length=', source.text.length)
+          gltf = await new Promise((res, rej) => loader.parse(source.text, '', res, rej))
         } else {
-          const buf = decodeBase64ToBuffer(glbData)
-          gltf = await new Promise((res, rej) => loader.parse(buf, '', res, rej))
+          gltf = await new Promise((res, rej) => loader.parse(source.buffer, '', res, rej))
         }
 
         loadedModel = gltf.scene
@@ -2798,6 +2911,8 @@ export default {
         console.error('STEP Viewer: model load error', err)
       } finally {
         isLoading.value = false
+        const revoke = getWin().URL?.revokeObjectURL?.bind(getWin().URL)
+        if (revoke) blobUrls.forEach((url) => revoke(url))
       }
     }
 
